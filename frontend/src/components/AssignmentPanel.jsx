@@ -69,7 +69,7 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
         setStatus(s);
         if (s.card_id) setCardId(s.card_id);
       })
-      .catch(() => setStatus({ configurado: false }));
+      .catch(() => setStatus({ configurado: false, sinBackend: true }));
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
     getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
   }, [onConfigChange]);
@@ -227,7 +227,16 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       )}
 
       <Card size="small" title="Pregunta de Metabase" style={{ marginBottom: 12 }}>
-        {status && !status.configurado && (
+        {status?.sinBackend && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message="No hay conexión con el backend"
+            description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
+          />
+        )}
+        {status && !status.sinBackend && !status.configurado && (
           <Alert
             type="warning"
             showIcon

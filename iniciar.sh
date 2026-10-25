@@ -31,7 +31,24 @@ for servicio in \
 done
 trap 'pkill -f "$PATRON_BACKEND" 2>/dev/null || true' EXIT
 
-echo "Backend iniciado (registros en logs/). Abriendo el frontend en http://localhost:3000 ..."
+# Espera a que el backend responda antes de abrir el frontend
+echo "Iniciando el backend..."
+for intento in $(seq 1 40); do
+  if curl -s -o /dev/null http://localhost:8000/api/health; then
+    break
+  fi
+  if [ "$intento" -eq 40 ]; then
+    echo "El backend no respondió. Últimas líneas de logs/backend-8000.log:"
+    tail -n 25 "$LOGS/backend-8000.log"
+    exit 1
+  fi
+  sleep 1
+done
+if ! curl -s http://localhost:8000/api/metabase/estado | grep -q '"configurado":true'; then
+  echo "Aviso: Metabase no está configurado. Completa METABASE_URL y METABASE_API_KEY en backend/.env (open -e backend/.env)."
+fi
+
+echo "Backend listo (registros en logs/). Abriendo el frontend en http://localhost:3000 ..."
 cd "$RAIZ/frontend"
 [ -d node_modules ] || npm install
 npm start
