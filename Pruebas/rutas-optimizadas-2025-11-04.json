@@ -1,0 +1,119 @@
+{
+  "nombre_lote": "Prueba",
+  "fecha_optimizacion": "2025-11-04T03:19:15.960711",
+  "total_actividades": 4,
+  "cuadrillas_necesarias": 1,
+  "rutas": [
+    {
+      "cuadrilla_id": 1,
+      "paradas": [
+        {
+          "secuencia": 1,
+          "actividad": {
+            "codigo_bia": "CO0100005507",
+            "servicio": "visita previa",
+            "gps": "10.4, -75.5",
+            "nombre": "Lean Solutions Group CL 28 CR 25-53 P 11",
+            "direccion": "CL 28 CR 25-53 P 11",
+            "ciudad": "Cartagena",
+            "departamento": "Bolivar",
+            "or_operador": "Afinia",
+            "coordinates": {
+              "latitude": 10.4,
+              "longitude": -75.5
+            }
+          },
+          "hora_llegada_estimada": "08:03:00",
+          "hora_salida_estimada": "09:03:00",
+          "distancia_desde_anterior_km": 1.14,
+          "tiempo_desplazamiento_minutos": 3
+        },
+        {
+          "secuencia": 2,
+          "actividad": {
+            "codigo_bia": "CO0100001762",
+            "servicio": "normalización telemedidas",
+            "gps": "10.4, -75.5",
+            "nombre": "Davivienda SA 2 CL 31 54 215 BLOQ 1 P1 LOC 19 BOCAGRANDE",
+            "direccion": "CL 31 54 215 BLOQ 1 P1 LOC 19 BOCAGRANDE",
+            "ciudad": "Cartagena",
+            "departamento": "Bolivar",
+            "or_operador": "Afinia",
+            "coordinates": {
+              "latitude": 10.4,
+              "longitude": -75.5
+            }
+          },
+          "hora_llegada_estimada": "09:03:00",
+          "hora_salida_estimada": "09:48:00",
+          "distancia_desde_anterior_km": 0,
+          "tiempo_desplazamiento_minutos": 0
+        },
+        {
+          "secuencia": 3,
+          "actividad": {
+            "codigo_bia": "CO0100002573",
+            "servicio": "normalización telemedidas",
+            "gps": "10.41,-75.5",
+            "nombre": "Reposteria Ely SAS CL 31 CR 58-118 P 1 LOC 67",
+            "direccion": "CL 31 CR 58-118 P 1 LOC 67",
+            "ciudad": "Cartagena",
+            "departamento": "Bolivar",
+            "or_operador": "Afinia",
+            "coordinates": {
+              "latitude": 10.41,
+              "longitude": -75.5
+            }
+          },
+          "hora_llegada_estimada": "09:51:00",
+          "hora_salida_estimada": "10:36:00",
+          "distancia_desde_anterior_km": 1.11,
+          "tiempo_desplazamiento_minutos": 3
+        },
+        {
+          "secuencia": 4,
+          "actividad": {
+            "codigo_bia": "CO1370000192",
+            "servicio": "normalización telemedidas",
+            "gps": "10.4,-75.52",
+            "nombre": "FEMSA - CEDI - CARTAGENA",
+            "direccion": "CEDI - CARTAGENA",
+            "ciudad": "Cartagena",
+            "departamento": "Bolivar",
+            "or_operador": "Afinia",
+            "coordinates": {
+              "latitude": 10.4,
+              "longitude": -75.52
+            }
+          },
+          "hora_llegada_estimada": "10:41:00",
+          "hora_salida_estimada": "11:26:00",
+          "distancia_desde_anterior_km": 2.45,
+          "tiempo_desplazamiento_minutos": 5
+        }
+      ],
+      "distancia_total_km": 5.99,
+      "tiempo_total_minutos": 209,
+      "tiempo_trabajo_minutos": 195,
+      "tiempo_desplazamiento_minutos": 14,
+      "hora_inicio": "08:00:00",
+      "hora_fin": "11:29:00",
+      "utilization_percent": 43.54,
+      "viable": true
+    }
+  ],
+  "distancia_total_km": 5.99,
+  "viable_en_un_dia": true,
+  "metricas": {
+    "total_activities": 4,
+    "total_crews": 1,
+    "total_distance_km": 5.99,
+    "avg_distance_per_crew": 5.99,
+    "avg_utilization_percent": 43.54,
+    "max_route_time_minutes": 209,
+    "min_route_time_minutes": 209,
+    "max_activities_per_crew": 4,
+    "min_activities_per_crew": 4,
+    "all_routes_viable": true
+  }
+}

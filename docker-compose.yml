@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  # Redis cache service
+  redis:
+    image: redis:7-alpine
+    container_name: route-optimizer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - route-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Data Service
+  data-service:
+    build:
+      context: ./backend
+      dockerfile: services/data_service/Dockerfile
+    container_name: route-optimizer-data-service
+    ports:
+      - "8001:8001"
+    environment:
+      - LOG_LEVEL=INFO
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./backend:/app
+      - upload-data:/app/uploads
+    networks:
+      - route-network
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Distance Service
+  distance-service:
+    build:
+      context: ./backend
+      dockerfile: services/distance_service/Dockerfile
+    container_name: route-optimizer-distance-service
+    ports:
+      - "8002:8002"
+    environment:
+      - LOG_LEVEL=INFO
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./backend:/app
+    networks:
+      - route-network
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Optimizer Service
+  optimizer-service:
+    build:
+      context: ./backend
+      dockerfile: services/optimizer_service/Dockerfile
+    container_name: route-optimizer-optimizer-service
+    ports:
+      - "8003:8003"
+    environment:
+      - LOG_LEVEL=INFO
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./backend:/app
+    networks:
+      - route-network
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./backend
+      dockerfile: api_gateway/Dockerfile
+    container_name: route-optimizer-api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=INFO
+      - DATA_SERVICE_URL=http://data-service:8001
+      - DISTANCE_SERVICE_URL=http://distance-service:8002
+      - OPTIMIZER_SERVICE_URL=http://optimizer-service:8003
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./backend:/app
+      - upload-data:/app/uploads
+    networks:
+      - route-network
+    depends_on:
+      - data-service
+      - distance-service
+      - optimizer-service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: route-optimizer-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api
+    networks:
+      - route-network
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+networks:
+  route-network:
+    driver: bridge
+    name: route-optimizer-network
+
+volumes:
+  redis-data:
+    name: route-optimizer-redis-data
+  upload-data:
+    name: route-optimizer-uploads
