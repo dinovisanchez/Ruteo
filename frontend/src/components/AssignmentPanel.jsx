@@ -12,7 +12,7 @@ import TechniciansModal from './TechniciansModal';
 import OrContractorsModal, { buildOrRows } from './OrContractorsModal';
 import OtTypesModal from './OtTypesModal';
 import {
-  getMetabaseStatus, fetchMetabaseOTs, getCatalog, getAssignmentConfig, saveAssignmentConfig, uploadFile,
+  getMetabaseStatus, fetchMetabaseOTs, getAssignmentConfig, saveAssignmentConfig, uploadFile,
   getOperators, getSheetTechnicians,
 } from '../services/api';
 import { otTypeSettings, normalizeText } from '../services/otTypes';
@@ -44,7 +44,7 @@ const countBy = (items, key) => {
   return counts;
 };
 
-const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfigChange }) => {
+const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfigChange, catalog, dia }) => {
   const [form] = Form.useForm();
   const [status, setStatus] = useState(null);
   const [cardId, setCardId] = useState('');
@@ -52,7 +52,8 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   const [fetchInfo, setFetchInfo] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshMinutes, setRefreshMinutes] = useState(10);
-  const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
+  // The question lives in Ajustes; it opens by itself when there is no question saved yet
+  const [ajustesAbiertos, setAjustesAbiertos] = useState([]);
   const [orFilter, setOrFilter] = useState([]);
   const [modo, setModo] = useState('automatico');
   // Every active technician is available unless unchecked for the day
@@ -71,9 +72,9 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       .then((s) => {
         setStatus(s);
         if (s.card_id) setCardId(s.card_id);
+        else setAjustesAbiertos(['ajustes']);
       })
       .catch(() => setStatus({ configurado: false, sinBackend: true }));
-    getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
     getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
     getSheetTechnicians().then(setHojaTecnicos).catch(() => setHojaTecnicos([]));
   }, [onConfigChange]);
@@ -139,8 +140,9 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       modo,
       actividades,
       or_filtro: orFilter,
-      tecnicos_ids: modo === 'contratistas' ? [] : disponibles,
-      cuadrillas: modo === 'contratistas' ? [] : cuadrillasManuales,
+      // Also in "solo contratistas": OTs already assigned to an available technician stay with them
+      tecnicos_ids: disponibles,
+      cuadrillas: cuadrillasManuales,
       personas_por_tipo: Object.fromEntries(tipos.map((s) => [s, otTypeSettings(s, config.tipos_ot).personas])),
       jornada: {
         horario_inicio: values.horario_inicio.format('HH:mm:ss'),
@@ -188,7 +190,7 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   const extractAndRecommend = async (silent) => {
     const actividades = await loadOts(silent);
     if (actividades?.length) await runAssign(actividades);
-    else if (actividades && !silent) message.info('La pregunta no devolvió OTs pendientes');
+    else if (actividades && !silent) message.info('La pregunta no devolvió OTs');
   };
 
   // The interval calls the latest version through a ref so it does not restart on every render
@@ -246,66 +248,44 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
         </Button>
       )}
 
-      <Card size="small" title="Pregunta de Metabase" style={{ marginBottom: 12 }}>
-        {status?.sinBackend && (
-          <Alert
-            type="error"
-            showIcon
-            style={{ marginBottom: 8 }}
-            message="No hay conexión con el backend"
-            description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
-          />
-        )}
-        {status && !status.sinBackend && !status.configurado && (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginBottom: 8 }}
-            message="Metabase no está configurado"
-            description="Completa METABASE_URL y METABASE_API_KEY en backend/.env y reinicia con ./iniciar.sh."
-          />
-        )}
-        <Space.Compact style={{ width: '100%' }}>
-          <Input
-            value={cardId}
-            placeholder="Número de la pregunta"
-            onChange={(e) => setCardId(e.target.value)}
-            prefix={<Text type="secondary">#</Text>}
-          />
-          <Button icon={<SaveOutlined />} onClick={saveDefaultCard} disabled={!cardId.trim() || cardId.trim() === savedCard}>
-            Predeterminar
-          </Button>
-        </Space.Compact>
-        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
-          {status?.servidor ? `${status.servidor} · ` : ''}
-          {savedCard ? `Predeterminada: #${savedCard}` : 'Guarda el número para no escribirlo cada vez'}
+      {fetchInfo && (
+        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 12 }}>
+          {fetchInfo.actividades.length} OTs de la pregunta #{fetchInfo.card_id}
+          {fetchInfo.geocodificadas ? ` · ${fetchInfo.geocodificadas} ubicadas por dirección` : ''}
+          {fetchInfo.sin_coordenadas ? ` · ${fetchInfo.sin_coordenadas} sin ubicación` : ''}
+          {fetchInfo.avisos.length ? ` · ${fetchInfo.avisos.length} avisos en Ajustes` : ''}
         </Text>
-        <Space style={{ marginTop: 8 }} size={4} wrap>
-          <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
-          <Text style={{ fontSize: 12 }}>Extraer y recomendar cada</Text>
-          <InputNumber size="small" min={1} max={120} value={refreshMinutes} onChange={setRefreshMinutes} style={{ width: 64 }} />
-          <Text style={{ fontSize: 12 }}>min</Text>
-        </Space>
-        <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
-          <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
-            o subir un Excel/CSV
-          </Button>
-        </Upload>
-        {fetchInfo && (
-          <div style={{ marginTop: 4 }}>
-            <Text style={{ fontSize: 12 }}>
-              {fetchInfo.actividades.length} OTs · {fetchInfo.geocodificadas} ubicadas por dirección · {fetchInfo.sin_coordenadas} sin ubicación
-            </Text>
-            {fetchInfo.avisos.map((aviso) => (
-              <Alert key={aviso} type="warning" message={aviso} showIcon style={{ marginTop: 4, fontSize: 12 }} />
-            ))}
-          </div>
-        )}
-      </Card>
+      )}
+      {status?.sinBackend && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="No hay conexión con el backend"
+          description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
+        />
+      )}
+      {status && !status.sinBackend && !status.configurado && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Metabase no está configurado"
+          description="Completa METABASE_URL y METABASE_API_KEY en backend/.env y reinicia con ./iniciar.sh."
+        />
+      )}
+      {status?.configurado && !savedCard && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Indica la pregunta de Metabase en Ajustes y pulsa Predeterminar"
+        />
+      )}
 
       <Card
         size="small"
-        title={`Técnicos disponibles hoy (${disponibles.length})`}
+        title={`Disponibles el ${dayjs(dia).format('ddd D MMM')} (${disponibles.length})`}
         style={{ marginBottom: 12 }}
         extra={<Button size="small" type="link" icon={<SettingOutlined />} onClick={() => setTechModalOpen(true)}>Gestionar</Button>}
       >
@@ -345,8 +325,8 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
             {disponibles.length > 1 && (
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {cuadrillasManuales.length
-                  ? `${cuadrillasManuales.length} pareja(s) armadas a mano; el resto sale solo.`
-                  : 'Las parejas para OTs de 2 personas se arman solas.'}
+                  ? `${cuadrillasManuales.length} pareja(s) armadas a mano; con el resto se arman las que pidan las OTs de 2 personas.`
+                  : 'Las parejas para OTs de 2 personas se arman solas (o como ya salen en Metabase).'}
               </Text>
             )}
           </div>
@@ -418,12 +398,45 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       <Collapse
         size="small"
         style={{ marginBottom: 12 }}
+        activeKey={ajustesAbiertos}
+        onChange={setAjustesAbiertos}
         items={[{
           key: 'ajustes',
           label: 'Ajustes',
           forceRender: true,
           children: (
             <>
+              <Text strong style={{ fontSize: 12 }}>Pregunta de Metabase</Text>
+              <Space.Compact style={{ width: '100%', margin: '4px 0 0' }}>
+                <Input
+                  value={cardId}
+                  placeholder="Número de la pregunta"
+                  onChange={(e) => setCardId(e.target.value)}
+                  prefix={<Text type="secondary">#</Text>}
+                />
+                <Button icon={<SaveOutlined />} onClick={saveDefaultCard} disabled={!cardId.trim() || cardId.trim() === savedCard}>
+                  Predeterminar
+                </Button>
+              </Space.Compact>
+              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+                {status?.servidor ? `${status.servidor} · ` : ''}
+                {savedCard ? `Predeterminada: #${savedCard}` : 'Guarda el número para no escribirlo cada vez'}
+              </Text>
+              <Space style={{ marginTop: 8 }} size={4} wrap>
+                <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
+                <Text style={{ fontSize: 12 }}>Extraer y recomendar cada</Text>
+                <InputNumber size="small" min={1} max={120} value={refreshMinutes} onChange={setRefreshMinutes} style={{ width: 64 }} />
+                <Text style={{ fontSize: 12 }}>min</Text>
+              </Space>
+              <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
+                <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
+                  o subir un Excel/CSV
+                </Button>
+              </Upload>
+              {fetchInfo?.avisos.map((aviso) => (
+                <Alert key={aviso} type="warning" message={aviso} showIcon style={{ marginTop: 4, fontSize: 12 }} />
+              ))}
+              <div style={{ marginBottom: 12 }} />
               <Text strong style={{ fontSize: 12 }}>Asignar a</Text>
               <Segmented
                 block

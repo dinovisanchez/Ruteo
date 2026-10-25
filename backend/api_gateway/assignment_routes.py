@@ -4,15 +4,17 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from collections import Counter
+from datetime import date
 from pathlib import Path
 import csv
-from typing import Dict, List, Optional
+import re
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from shared.catalogo import cargar_catalogo, normalizar_texto
+from shared.catalogo import cargar_catalogo, nombre_empresa, normalizar_texto
 from shared.operadores import cargar_operadores, clave, normalizar_departamento, resolver_or
 from shared.config import settings
 from shared.models import (
@@ -29,6 +31,7 @@ from shared.models import (
 from shared.utils import setup_logging
 from . import metabase
 from .geocoding import geocodificar
+from .trazado import trazar
 
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
@@ -117,7 +120,125 @@ class AsignarRequest(BaseModel):
     cuadrillas: List[List[str]] = Field(default_factory=list)
     # Tipo de OT → personas que necesita; los tipos que no aparecen necesitan 1
     personas_por_tipo: Dict[str, int] = Field(default_factory=dict)
+    # Día del plan (YYYY-MM-DD; vacío = hoy): entran las OTs ya asignadas para ese día y las pendientes
+    dia: Optional[str] = None
+    # Ediciones a mano: OT → "tecnico:<id>", "empresa:<id>", "contratista" o "auto" (que decida la app)
+    fijas: Dict[str, str] = Field(default_factory=dict)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
+
+
+class TrazadoRuta(BaseModel):
+    id: str
+    puntos: List[List[float]]  # [[lat, lon], ...] en orden de visita, empezando por la base
+
+
+class TrazadoRequest(BaseModel):
+    rutas: List[TrazadoRuta]
+
+
+def tecnicos_mencionados(texto: Optional[str], tecnicos: List[Tecnico]) -> List[Tecnico]:
+    """Técnicos de la app que aparecen en "Electricistas asignados" de Metabase.
+
+    Cada persona del texto ("CARLOS ANDRÉS SALAS, Juan Reyes") coincide con el técnico
+    cuyo nombre completo está contenido en ella, sin importar mayúsculas ni tildes.
+    """
+    encontrados: List[Tecnico] = []
+    for persona in re.split(r"[,;|/\n\[\]\"]+| y ", texto or "", flags=re.IGNORECASE):
+        palabras = set(clave(persona).split())
+        if not palabras:
+            continue
+        for tecnico in tecnicos:
+            nombre = set(clave(tecnico.nombre).split())
+            if nombre and nombre <= palabras and tecnico not in encontrados:
+                encontrados.append(tecnico)
+    return encontrados
+
+
+def empresa_mencionada(texto: Optional[str], sedes: List[SedeOperativa]) -> Optional[str]:
+    """Id de la empresa contratista que corresponde al "Contratista asignado" de Metabase"""
+    palabras = set(clave(nombre_empresa(texto or "")).split())
+    if not palabras:
+        return None
+    empresas = {s.empresa_id: set(clave(s.empresa).split()) for s in sedes if s.tipo == "contratista"}
+    # El texto trae el nombre completo de la empresa (gana el más largo) o una parte que solo una tiene
+    contenidas = sorted(((len(p), e) for e, p in empresas.items() if p and p <= palabras), reverse=True)
+    if contenidas:
+        return contenidas[0][1]
+    contienen = [e for e, p in empresas.items() if palabras <= p]
+    return contienen[0] if len(contienen) == 1 else None
+
+
+def plan_del_dia(
+    actividades: List[Activity],
+    dia: str,
+    ediciones: Dict[str, str],
+    tecnicos: List[Tecnico],
+    disponibles: List[Tecnico],
+    sedes: List[SedeOperativa],
+) -> Tuple[List[Activity], Dict[str, str], Dict[str, str], Dict[str, str], List[List[str]], Dict]:
+    """OTs del día y a quién quedan fijadas.
+
+    Entran las pendientes y las asignadas en Metabase para `dia`. Una asignada queda
+    fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
+    si está en el catálogo, o como externa si su responsable no está en la app. Las
+    ediciones a mano mandan sobre lo que dice Metabase.
+
+    Devuelve (actividades, fijas, externas, notas, parejas de Metabase, métricas).
+    """
+    ids_disponibles = {t.id for t in disponibles}
+    del_dia: List[Activity] = []
+    fijas: Dict[str, str] = {}
+    externas: Dict[str, str] = {}
+    notas: Dict[str, str] = {}
+    parejas: List[List[str]] = []
+    otros_dias = sin_fecha = 0
+
+    for actividad in actividades:
+        codigo = actividad.codigo_bia
+        if actividad.situacion == "asignada" and actividad.fecha_visita != dia:
+            if actividad.fecha_visita:
+                otros_dias += 1
+            else:
+                sin_fecha += 1
+            continue
+        del_dia.append(actividad)
+
+        edicion = ediciones.get(codigo)
+        if edicion and edicion != "auto":
+            fijas[codigo] = edicion
+            if edicion != "contratista":
+                notas[codigo] = "Editada a mano"
+            continue
+        if actividad.situacion != "asignada":
+            continue
+        responsable = actividad.asignado_a or actividad.contratista_asignado
+        if edicion == "auto":
+            notas[codigo] = f"Estaba asignada a {responsable or 'otro responsable'}; la app la reasigna"
+            continue
+
+        mencionados = tecnicos_mencionados(actividad.asignado_a, tecnicos)
+        if mencionados:
+            en_turno = [t for t in mencionados if t.id in ids_disponibles]
+            if en_turno:
+                fijas[codigo] = f"tecnico:{en_turno[0].id}"
+                notas[codigo] = f"Asignada en Metabase a {actividad.asignado_a}"
+                if len(en_turno) >= 2:
+                    parejas.append([t.id for t in en_turno[:2]])
+            else:
+                nombres = ", ".join(t.nombre for t in mencionados)
+                notas[codigo] = f"Estaba asignada a {nombres}, que no está disponible; la app la reasigna"
+            continue
+        empresa = empresa_mencionada(actividad.contratista_asignado, sedes)
+        if empresa:
+            fijas[codigo] = f"empresa:{empresa}"
+            notas[codigo] = f"Asignada en Metabase a {actividad.contratista_asignado}"
+            continue
+        if actividad.asignado_a and actividad.contratista_asignado:
+            responsable = f"{actividad.asignado_a} ({actividad.contratista_asignado})"
+        externas[codigo] = responsable or "Responsable sin registrar en Metabase"
+
+    metricas = {"dia": dia, "ots_otros_dias": otros_dias, "asignadas_sin_fecha": sin_fecha}
+    return del_dia, fijas, externas, notas, parejas, metricas
 
 
 def pregunta_predeterminada() -> Optional[str]:
@@ -261,39 +382,59 @@ async def actualizar_config(config: AsignacionConfig):
 @router.post("/asignar", response_model=AssignmentResult)
 async def asignar(request: AsignarRequest):
     """
-    Filtra las OTs por OR y las asigna:
-    - inhouse: entre los técnicos seleccionados, cada uno saliendo de su base
-    - contratistas: al contratista más cercano entre los que atienden el OR de cada OT
+    Plan del día: toma las OTs pendientes y las ya asignadas para ese día (filtradas por OR)
+    y decide a quién enviar cada una:
+    - las asignadas se quedan con su técnico o contratista (si el técnico no está
+      disponible, se reasignan); las ediciones a mano mandan sobre Metabase
+    - las pendientes van a los técnicos disponibles o al contratista más cercano de su OR
     """
     filtro = {normalizar_texto(o) for o in request.or_filtro}
     actividades = [a for a in request.actividades if not filtro or normalizar_texto(a.or_operador) in filtro]
     if not actividades:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay OTs para los OR seleccionados")
 
+    config = leer_config()
+    sedes = obtener_catalogo()["sedes"]
+    por_id = {t.id: t for t in config.tecnicos}
+    # Los técnicos disponibles también reciben las OTs fijadas a ellos en modo "solo contratistas"
+    tecnicos = [por_id[i] for i in request.tecnicos_ids if i in por_id]
+    if not tecnicos and request.modo == "inhouse":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un técnico")
+
+    dia = request.dia or date.today().isoformat()
+    actividades, fijas, externas, notas, parejas, metricas_dia = plan_del_dia(
+        actividades, dia, request.fijas, config.tecnicos, tecnicos, sedes
+    )
+    if not actividades:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No hay OTs pendientes ni asignadas para el {dia}",
+        )
+
     personas = {normalizar_texto(k): v for k, v in request.personas_por_tipo.items()}
     for actividad in actividades:
         actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
 
-    config = leer_config()
-    tecnicos = []
-    cuadrillas: List[List[str]] = []
-    if request.modo in ("inhouse", "automatico"):
-        por_id = {t.id: t for t in config.tecnicos}
-        tecnicos = [por_id[i] for i in request.tecnicos_ids if i in por_id]
-        if not tecnicos and request.modo == "inhouse":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un técnico")
-        seleccionados = {t.id for t in tecnicos}
-        cuadrillas = [[i for i in grupo if i in seleccionados] for grupo in request.cuadrillas]
-        cuadrillas = [grupo for grupo in cuadrillas if grupo]
+    # Parejas a mano primero; luego las que ya salen juntas en Metabase, si no chocan
+    seleccionados = {t.id for t in tecnicos}
+    cuadrillas = [[i for i in grupo if i in seleccionados] for grupo in request.cuadrillas]
+    cuadrillas = [grupo for grupo in cuadrillas if grupo]
+    for pareja in parejas:
+        en_cuadrilla = {i for grupo in cuadrillas for i in grupo}
+        if not en_cuadrilla & set(pareja):
+            cuadrillas.append(pareja)
 
     pedido = AssignmentRequest(
         modo=request.modo,
         actividades=actividades,
-        sedes=obtener_catalogo()["sedes"],
+        sedes=sedes,
         tecnicos=tecnicos,
         cuadrillas=cuadrillas,
         or_contratistas=config.or_contratistas,
         operadores=obtener_operadores(),
+        fijas=fijas,
+        externas=externas,
+        notas=notas,
         jornada=request.jornada,
     )
     try:
@@ -306,4 +447,29 @@ async def asignar(request: AsignarRequest):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Optimizer service unavailable: {e}")
     if respuesta.status_code != 200:
         raise HTTPException(status_code=respuesta.status_code, detail=respuesta.json().get("detail", respuesta.text))
-    return AssignmentResult(**respuesta.json())
+    resultado = AssignmentResult(**respuesta.json())
+    resultado.metricas.update(metricas_dia)
+    return resultado
+
+
+@router.post("/rutas/trazado", response_model=dict)
+async def trazado_rutas(request: TrazadoRequest):
+    """
+    Geometría por vías (OSRM) de cada ruta, para dibujarla en el mapa siguiendo las calles.
+    Las rutas que no se pueden trazar no vienen en la respuesta: el mapa las deja en línea recta.
+    """
+    if not settings.OSRM_URL:
+        return {"rutas": {}, "aviso": "OSRM_URL está vacío: las rutas se dibujan en línea recta"}
+    rutas = {}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+        for ruta in request.rutas:
+            if len(ruta.puntos) < 2:
+                continue
+            try:
+                trazo = await trazar(client, ruta.puntos)
+            except httpx.HTTPError as e:
+                logger.warning(f"OSRM no respondió ({settings.OSRM_URL}): {e}")
+                return {"rutas": rutas, "aviso": f"No se pudo consultar OSRM en {settings.OSRM_URL}"}
+            if trazo:
+                rutas[ruta.id] = {"geometria": trazo[0], "km": trazo[1]}
+    return {"rutas": rutas}

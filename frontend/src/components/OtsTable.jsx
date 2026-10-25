@@ -49,6 +49,29 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       ),
     },
     {
+      title: 'Situación',
+      width: 120,
+      filters: [{ text: 'Ya asignada', value: 'asignada' }, { text: 'Por asignar', value: 'pendiente' }],
+      onFilter: (value, a) => a.situacion === value,
+      render: (_, a) => (a.situacion === 'asignada'
+        ? <Tag color="green">Ya asignada</Tag> : <Tag color="orange">Por asignar</Tag>),
+    },
+    {
+      title: 'Fecha visita',
+      dataIndex: 'fecha_visita',
+      width: 120,
+      sorter: (a, b) => (a.fecha_visita || '~').localeCompare(b.fecha_visita || '~'),
+      filters: columnFilters(ots, (a) => a.fecha_visita),
+      onFilter: (value, a) => a.fecha_visita === value,
+      render: (fecha) => (fecha ? dayjs(fecha).format('ddd D MMM') : ''),
+    },
+    {
+      title: 'Asignada a',
+      width: 220,
+      ellipsis: true,
+      render: (_, a) => [a.asignado_a, a.contratista_asignado].filter(Boolean).join(' · '),
+    },
+    {
       title: 'OR',
       dataIndex: 'or_operador',
       width: 110,

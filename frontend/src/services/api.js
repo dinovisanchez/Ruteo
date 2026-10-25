@@ -117,8 +117,9 @@ export const saveAssignmentConfig = async (config) => {
 };
 
 /**
- * Assign OTs filtered by OR to in-house technicians or contractors
- * @param {Object} request - { modo, actividades, or_filtro, tecnicos_ids, jornada }
+ * Day plan: OTs already assigned for that day plus the pending ones, to technicians or contractors
+ * @param {Object} request - { modo, actividades, or_filtro, tecnicos_ids, cuadrillas, personas_por_tipo,
+ *   dia, fijas, jornada }; fijas maps an OT to "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
  * @returns {Promise<Object>} Assignment result with routes per technician/contractor
  */
 export const assignActivities = async (request) => {
@@ -144,6 +145,16 @@ export const getOperators = async (nombres = []) => {
  */
 export const getSheetTechnicians = async () => {
   const response = await apiClient.get('/tecnicos/hoja');
+  return response.data;
+};
+
+/**
+ * Road geometry of routes (OSRM), to draw them along the streets
+ * @param {Object[]} rutas - [{ id, puntos: [[lat, lon], ...] }] in visiting order
+ * @returns {Promise<Object>} { rutas: { [id]: { geometria: [[lat, lon], ...], km } }, aviso? }
+ */
+export const getRouteGeometry = async (rutas) => {
+  const response = await apiClient.post('/rutas/trazado', { rutas });
   return response.data;
 };
 

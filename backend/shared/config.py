@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     GEOCODING_ENABLED: bool = True
     GEOCODING_MAX_POR_CONSULTA: int = 30
 
+    # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
+    OSRM_URL: str = "https://router.project-osrm.org"
+    # El servidor público de OSRM pide máximo una consulta por segundo
+    OSRM_PAUSA_SEGUNDOS: float = 1.0
+
     class Config:
         env_file = ".env"
         case_sensitive = True

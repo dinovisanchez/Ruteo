@@ -35,6 +35,11 @@ class Activity(BaseModel):
     personas_requeridas: int = Field(default=1, ge=1)
     # Todas las columnas de la fila de origen (Metabase), tal como llegaron
     extras: Dict[str, Any] = Field(default_factory=dict)
+    # "asignada" cuando en Metabase ya tiene fecha y responsables
+    situacion: Literal["pendiente", "asignada"] = "pendiente"
+    fecha_visita: Optional[str] = None  # YYYY-MM-DD
+    asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
+    contratista_asignado: Optional[str] = None
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""
@@ -482,11 +487,18 @@ class AssignmentRequest(BaseModel):
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
     # Catálogo de OR: sin lista manual, el contratista sale de los departamentos que atiende el OR
     operadores: List[OperadorRed] = Field(default_factory=list)
+    # OT → a quién queda fijada: "tecnico:<id>", "empresa:<empresa_id>" o "contratista" (cualquiera)
+    fijas: Dict[str, str] = Field(default_factory=dict)
+    # OT → responsable externo (ya asignada a alguien que no está en la app): no se enruta
+    externas: Dict[str, str] = Field(default_factory=dict)
+    # OT → texto que antecede al motivo de la decisión (ej. por qué se reasignó)
+    notas: Dict[str, str] = Field(default_factory=dict)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
 class OpcionContratista(BaseModel):
     sede_id: str
+    empresa_id: Optional[str] = None
     empresa: str
     ciudad: str
     distancia_km: float
@@ -501,7 +513,8 @@ class RecomendacionContratista(BaseModel):
     # "departamento_or": entre los que tienen sede en los departamentos que atiende el OR
     # "departamento_ot": el OR no está en el catálogo; entre los que tienen sede en el departamento de la OT
     # "sin_lista_or": ningún contratista tiene sede en la zona; el más cercano de todos
-    criterio: Literal["lista_or", "departamento_or", "departamento_ot", "sin_lista_or"]
+    # "fijada": la OT quedó fijada a ese contratista (en Metabase o a mano)
+    criterio: Literal["lista_or", "departamento_or", "departamento_ot", "sin_lista_or", "fijada"]
     or_canonico: Optional[str] = None  # Nombre del OR en el catálogo, si se reconoció
     zona: Optional[str] = None  # Departamentos considerados, para explicar la elección
     alternativas: List[OpcionContratista] = Field(default_factory=list)
@@ -527,7 +540,9 @@ class ActividadSinAsignar(BaseModel):
 class DecisionOT(BaseModel):
     """A quién se recomienda enviar una OT y por qué"""
     codigo_bia: str
-    enviar_a: Literal["tecnico", "contratista", "sin_asignar"]
+    enviar_a: Literal["tecnico", "contratista", "externo", "sin_asignar"]
+    situacion: Literal["pendiente", "asignada"] = "pendiente"
+    fijada: bool = False  # Quedó fija por una asignación previa o una edición manual
     responsable_id: Optional[str] = None
     responsable: Optional[str] = None
     sede: Optional[str] = None  # "Empresa (Ciudad)" de donde sale la cuadrilla
