@@ -405,7 +405,11 @@ La pregunta debe tener, como mínimo, una columna con el código de la OT y otra
 
 **2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.
 
-**3. Técnicos y contratistas por OR** — se editan desde la app y se guardan en `backend/data/asignacion.json`.
+**3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`:
+- **Técnicos in-house**: nombre, base (por defecto Bia Bogotá) y **costo por día**. El resultado muestra el costo de cada cuadrilla y el total.
+- **Tipos de OT**: minutos y **personas** de cada tipo. Por defecto Instalación, Emergencia y Normalización medida piden 2 personas. Esas OTs solo se asignan a parejas: la app sugiere las parejas que hacen falta en cada base, o puedes armarlas a mano con el selector *Pareja* junto a cada técnico.
+
+La tabla **Todas las OTs** muestra todas las columnas que trae la pregunta de Metabase; en el resultado, cada OT se puede expandir para verlas, y el CSV las incluye.
 
 **4. Usar** — *Traer OTs* (o activa *Actualizar cada N min*: las OTs nuevas se marcan como **Nueva**), filtra por OR, elige *Técnicos in-house* o *Contratistas* y pulsa **Asignar**. El resultado se puede descargar en CSV.
 

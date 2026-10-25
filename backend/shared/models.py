@@ -31,6 +31,10 @@ class Activity(BaseModel):
     coordinates: Optional[GPSCoordinates] = None
     # True cuando las coordenadas salen de geocodificar la dirección y no de un GPS
     coordenadas_aproximadas: bool = False
+    # Personas que necesita la OT según su tipo (las cuadrillas de 2 atienden las que piden 2)
+    personas_requeridas: int = Field(default=1, ge=1)
+    # Todas las columnas de la fila de origen (Metabase), tal como llegaron
+    extras: Dict[str, Any] = Field(default_factory=dict)
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""
@@ -422,6 +426,13 @@ class Tecnico(BaseModel):
     nombre: str
     base_id: str  # id de una SedeOperativa
     activo: bool = True
+    costo_dia: Optional[float] = Field(default=None, ge=0)  # COP por jornada
+
+
+class TipoOT(BaseModel):
+    """Duración y personas necesarias para un tipo de OT"""
+    minutos: int = Field(default=60, gt=0)
+    personas: int = Field(default=1, ge=1, le=4)
 
 
 class AsignacionConfig(BaseModel):
@@ -429,6 +440,8 @@ class AsignacionConfig(BaseModel):
     tecnicos: List[Tecnico] = Field(default_factory=list)
     # Nombre del OR (ej. "Afinia") → empresa_id de los contratistas que lo atienden
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
+    # Nombre del tipo de OT (ej. "Instalación") → minutos y personas
+    tipos_ot: Dict[str, TipoOT] = Field(default_factory=dict)
 
 
 class JornadaConfig(BaseModel):
@@ -449,6 +462,8 @@ class AssignmentRequest(BaseModel):
     actividades: List[Activity]
     sedes: List[SedeOperativa]
     tecnicos: List[Tecnico] = Field(default_factory=list)  # Solo los seleccionados
+    # Cuadrillas armadas a mano (ids de técnicos); vacío = la app las sugiere
+    cuadrillas: List[List[str]] = Field(default_factory=list)
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
@@ -472,12 +487,15 @@ class RecomendacionContratista(BaseModel):
 
 
 class RutaAsignada(BaseModel):
-    """Ruta de un técnico o de una cuadrilla de un contratista"""
+    """Ruta de una cuadrilla in-house o de una cuadrilla de un contratista"""
     responsable_id: str
     responsable: str
     tipo: Literal["tecnico", "contratista"]
     sede: SedeOperativa
     ruta: CrewRoute
+    integrantes: List[str] = Field(default_factory=list)  # Nombres de los técnicos (in-house)
+    personas: int = Field(default=1, ge=1)
+    costo: Optional[float] = None  # Suma del costo por día de los integrantes
 
 
 class ActividadSinAsignar(BaseModel):

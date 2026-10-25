@@ -222,7 +222,7 @@ def filas_a_actividades(
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
-            servicio=_texto(fila.get(mapeo.get("servicio", ""))).lower() or SERVICIO_POR_DEFECTO,
+            servicio=_texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO,
             gps=f"{coords.latitude},{coords.longitude}" if coords else "",
             nombre=_texto(fila.get(mapeo.get("nombre", ""))),
             direccion=_texto(fila.get(mapeo.get("direccion", ""))),
@@ -230,6 +230,7 @@ def filas_a_actividades(
             departamento=_texto(fila.get(mapeo.get("departamento", ""))),
             or_operador=_texto(fila.get(mapeo["or_operador"])) or "Sin OR",
             coordinates=coords,
+            extras=dict(fila),
         ))
     if duplicadas:
         avisos.append(f"{duplicadas} filas repetidas (mismo código de OT) se tomaron una sola vez")

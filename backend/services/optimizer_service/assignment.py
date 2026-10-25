@@ -21,6 +21,7 @@ from shared.models import (
     RouteStop,
     RutaAsignada,
     SedeOperativa,
+    Tecnico,
 )
 from shared.catalogo import normalizar_texto
 from shared.config import settings
@@ -68,13 +69,15 @@ def _resolver_vrp(
     dist: Distancias,
     limite_segundos: int,
     metas: Optional[List[Optional[int]]] = None,
+    personas_vehiculo: Optional[List[int]] = None,
 ) -> Tuple[List[List[int]], List[int], List[int]]:
     """Reparte las actividades entre vehículos que salen de `inicios`.
 
     Cada vehículo tiene la jornada como tope de tiempo (viaje + servicio). Las
     actividades que no caben quedan descartadas. `metas` penaliza los minutos
-    que cada vehículo pasa de su meta. Devuelve (rutas, descartadas, minutos
-    por vehículo), con índices sobre `actividades`.
+    que cada vehículo pasa de su meta. Con `personas_vehiculo`, una OT solo va
+    a vehículos (cuadrillas) con al menos las personas que requiere. Devuelve
+    (rutas, descartadas, minutos por vehículo), con índices sobre `actividades`.
     """
     n, m = len(actividades), len(inicios)
     if n == 0:
@@ -125,7 +128,13 @@ def _resolver_vrp(
         )
 
     for nodo in range(m, m + n):
-        routing.AddDisjunction([manager.NodeToIndex(nodo)], PENALIZACION_SIN_ASIGNAR)
+        indice = manager.NodeToIndex(nodo)
+        routing.AddDisjunction([indice], PENALIZACION_SIN_ASIGNAR)
+        if personas_vehiculo:
+            requeridas = actividades[nodo - m].personas_requeridas
+            permitidos = [v for v in range(m) if personas_vehiculo[v] >= requeridas]
+            if len(permitidos) < m:
+                routing.SetAllowedVehiclesForIndex(permitidos, indice)
 
     parametros = pywrapcp.DefaultRoutingSearchParameters()
     parametros.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -162,6 +171,7 @@ def _resolver_balanceado(
     jornada: JornadaConfig,
     dist: Distancias,
     limite_segundos: int,
+    personas_vehiculo: Optional[List[int]] = None,
 ) -> Tuple[List[List[int]], List[int]]:
     """Como `_resolver_vrp`, pero reparte la carga entre los vehículos de un mismo grupo (base).
 
@@ -169,7 +179,9 @@ def _resolver_balanceado(
     cada grupo como meta. Se queda con la segunda solución si no deja más OTs
     sin asignar.
     """
-    rutas, descartadas, minutos = _resolver_vrp(actividades, inicios, jornada, dist, limite_segundos)
+    rutas, descartadas, minutos = _resolver_vrp(
+        actividades, inicios, jornada, dist, limite_segundos, personas_vehiculo=personas_vehiculo
+    )
     por_grupo: Dict[str, List[int]] = {}
     for vehiculo, grupo in enumerate(grupos):
         por_grupo.setdefault(grupo, []).append(vehiculo)
@@ -182,7 +194,9 @@ def _resolver_balanceado(
             meta = math.ceil(sum(minutos[v] for v in vehiculos) / len(vehiculos))
             for v in vehiculos:
                 metas[v] = meta
-    rutas_b, descartadas_b, _ = _resolver_vrp(actividades, inicios, jornada, dist, limite_segundos, metas)
+    rutas_b, descartadas_b, _ = _resolver_vrp(
+        actividades, inicios, jornada, dist, limite_segundos, metas, personas_vehiculo
+    )
     if len(descartadas_b) <= len(descartadas):
         return rutas_b, descartadas_b
     return rutas, descartadas
@@ -265,42 +279,113 @@ def _separar_sin_coordenadas(actividades: List[Activity]) -> Tuple[List[Activity
     return con_coordenadas, sin_coordenadas
 
 
+def armar_cuadrillas(
+    tecnicos: List[Tecnico],
+    manuales: List[List[str]],
+    actividades: List[Activity],
+    sedes: Dict[str, SedeOperativa],
+    jornada: JornadaConfig,
+) -> List[List[Tecnico]]:
+    """Agrupa a los técnicos seleccionados en cuadrillas de 1 o 2 personas.
+
+    Las cuadrillas manuales se respetan; el resto de técnicos sale solo. Sin
+    cuadrillas manuales, en cada base se forman las parejas que pide el trabajo
+    de las OTs de 2 o más personas (asignando cada OT a la base más cercana).
+    """
+    por_id = {t.id: t for t in tecnicos}
+    if manuales:
+        cuadrillas = [[por_id[i] for i in grupo if i in por_id] for grupo in manuales]
+        cuadrillas = [c for c in cuadrillas if c]
+        usados = {t.id for c in cuadrillas for t in c}
+        return cuadrillas + [[t] for t in tecnicos if t.id not in usados]
+
+    por_base: Dict[str, List[Tecnico]] = {}
+    for tecnico in tecnicos:
+        por_base.setdefault(tecnico.base_id, []).append(tecnico)
+
+    servicios = _tiempos_servicio(jornada)
+    minutos_pareja: Dict[str, int] = {base: 0 for base in por_base}
+    for actividad in actividades:
+        if actividad.personas_requeridas < 2:
+            continue
+        base = min(por_base, key=lambda b: haversine_distance(sedes[b].coordinates, actividad.coordinates))
+        minutos_pareja[base] += get_service_time(actividad.servicio, servicios)
+
+    max_minutos = int(jornada.horas_laborales * 60)
+    cuadrillas: List[List[Tecnico]] = []
+    for base, grupo in por_base.items():
+        # El 1,25 cubre los desplazamientos, igual que la estimación de cuadrillas de contratistas
+        parejas = min(len(grupo) // 2, math.ceil(minutos_pareja[base] * 1.25 / max_minutos))
+        cuadrillas += [grupo[2 * k:2 * k + 2] for k in range(parejas)]
+        cuadrillas += [[t] for t in grupo[2 * parejas:]]
+    return cuadrillas
+
+
+def _costo_cuadrilla(cuadrilla: List[Tecnico]) -> Optional[float]:
+    costos = [t.costo_dia for t in cuadrilla if t.costo_dia is not None]
+    return float(sum(costos)) if costos else None
+
+
 def asignar_inhouse(request: AssignmentRequest) -> AssignmentResult:
-    """Reparte las OTs entre los técnicos seleccionados, cada uno saliendo de su base"""
+    """Reparte las OTs entre cuadrillas de los técnicos seleccionados, cada una saliendo de su base"""
     sedes = {s.id: s for s in request.sedes}
     tecnicos = [t for t in request.tecnicos if t.base_id in sedes]
     if not tecnicos:
         raise ValueError("Selecciona al menos un técnico con una base válida")
 
     actividades, sin_asignar = _separar_sin_coordenadas(request.actividades)
+    cuadrillas = armar_cuadrillas(tecnicos, request.cuadrillas, actividades, sedes, request.jornada)
+    max_personas = max(len(c) for c in cuadrillas)
+    atendibles = [a for a in actividades if a.personas_requeridas <= max_personas]
+    sin_asignar += [
+        ActividadSinAsignar(
+            actividad=a,
+            motivo=f"Requiere {a.personas_requeridas} personas y no hay una cuadrilla de ese tamaño",
+        )
+        for a in actividades if a.personas_requeridas > max_personas
+    ]
+
     dist = Distancias(request.jornada)
-    inicios = [sedes[t.base_id].coordinates for t in tecnicos]
     rutas_idx, descartadas = _resolver_balanceado(
-        actividades, inicios, [t.base_id for t in tecnicos], request.jornada, dist,
-        _limite_solver(len(actividades)),
+        atendibles,
+        [sedes[c[0].base_id].coordinates for c in cuadrillas],
+        [c[0].base_id for c in cuadrillas],
+        request.jornada,
+        dist,
+        _limite_solver(len(atendibles)),
+        personas_vehiculo=[len(c) for c in cuadrillas],
     )
 
     rutas: List[RutaAsignada] = []
-    for numero, (tecnico, indices) in enumerate(zip(tecnicos, rutas_idx), start=1):
+    for numero, (cuadrilla, indices) in enumerate(zip(cuadrillas, rutas_idx), start=1):
         if not indices:
             continue
-        sede = sedes[tecnico.base_id]
+        sede = sedes[cuadrilla[0].base_id]
         rutas.append(RutaAsignada(
-            responsable_id=tecnico.id,
-            responsable=tecnico.nombre,
+            responsable_id="+".join(t.id for t in cuadrilla),
+            responsable=" + ".join(t.nombre for t in cuadrilla),
             tipo="tecnico",
             sede=sede,
-            ruta=construir_ruta(numero, [actividades[i] for i in indices], sede.coordinates, request.jornada, dist),
+            ruta=construir_ruta(numero, [atendibles[i] for i in indices], sede.coordinates, request.jornada, dist),
+            integrantes=[t.nombre for t in cuadrilla],
+            personas=len(cuadrilla),
+            costo=_costo_cuadrilla(cuadrilla),
         ))
 
     sin_asignar += [
         ActividadSinAsignar(
-            actividad=actividades[i],
+            actividad=atendibles[i],
             motivo="No cabe en la jornada de los técnicos seleccionados",
         )
         for i in descartadas
     ]
-    return _resultado("inhouse", request, rutas, [], sin_asignar, {"tecnicos_seleccionados": len(tecnicos)})
+    extra = {
+        "tecnicos_seleccionados": len(tecnicos),
+        "cuadrillas_armadas": len(cuadrillas),
+        "parejas": sum(1 for c in cuadrillas if len(c) >= 2),
+        "cuadrillas_manuales": bool(request.cuadrillas),
+    }
+    return _resultado("inhouse", request, rutas, [], sin_asignar, extra)
 
 
 def recomendar_contratista(
@@ -433,6 +518,7 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
                 tipo="contratista",
                 sede=sede,
                 ruta=construir_ruta(numero, ruta, sede.coordinates, request.jornada, dist),
+                personas=max(a.personas_requeridas for a in ruta),
             ))
         # Las lejanas también son de este contratista: van juntas en un viaje que supera la jornada
         if lejanas:
@@ -446,6 +532,7 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
                     numero, _ordenar_por_cercania(lejanas, sede.coordinates, dist),
                     sede.coordinates, request.jornada, dist,
                 ),
+                personas=max(a.personas_requeridas for a in lejanas),
             ))
 
     por_contratista: Dict[str, int] = {}
@@ -468,8 +555,10 @@ def _resultado(
 ) -> AssignmentResult:
     distancia = round(sum(r.ruta.distancia_total_km for r in rutas), 2)
     asignadas = sum(len(r.ruta.paradas) for r in rutas)
+    costos = [r.costo for r in rutas if r.costo is not None]
     metricas = {
         "ots_asignadas": asignadas,
+        "costo_total": round(sum(costos), 2) if costos else None,
         "ots_sin_asignar": len(sin_asignar),
         "rutas": len(rutas),
         "rutas_no_viables": sum(1 for r in rutas if not r.ruta.viable),

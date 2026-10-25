@@ -79,6 +79,10 @@ class AsignarRequest(BaseModel):
     actividades: List[Activity]
     or_filtro: List[str] = Field(default_factory=list)  # Vacío = todos los OR
     tecnicos_ids: List[str] = Field(default_factory=list)
+    # Parejas armadas a mano (ids de técnicos); vacío = la app sugiere las cuadrillas
+    cuadrillas: List[List[str]] = Field(default_factory=list)
+    # Tipo de OT → personas que necesita; los tipos que no aparecen necesitan 1
+    personas_por_tipo: Dict[str, int] = Field(default_factory=dict)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
@@ -186,19 +190,28 @@ async def asignar(request: AsignarRequest):
     if not actividades:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay OTs para los OR seleccionados")
 
+    personas = {normalizar_texto(k): v for k, v in request.personas_por_tipo.items()}
+    for actividad in actividades:
+        actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
+
     config = leer_config()
     tecnicos = []
+    cuadrillas: List[List[str]] = []
     if request.modo == "inhouse":
         por_id = {t.id: t for t in config.tecnicos}
         tecnicos = [por_id[i] for i in request.tecnicos_ids if i in por_id]
         if not tecnicos:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un técnico")
+        seleccionados = {t.id for t in tecnicos}
+        cuadrillas = [[i for i in grupo if i in seleccionados] for grupo in request.cuadrillas]
+        cuadrillas = [grupo for grupo in cuadrillas if grupo]
 
     pedido = AssignmentRequest(
         modo=request.modo,
         actividades=actividades,
         sedes=obtener_catalogo()["sedes"],
         tecnicos=tecnicos,
+        cuadrillas=cuadrillas,
         or_contratistas=config.or_contratistas,
         jornada=request.jornada,
     )
