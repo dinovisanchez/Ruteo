@@ -11,6 +11,7 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from shared.models import (
     Activity,
     ActividadSinAsignar,
+    DecisionOT,
     AssignmentRequest,
     AssignmentResult,
     CrewRoute,
@@ -375,7 +376,7 @@ def asignar_inhouse(request: AssignmentRequest) -> AssignmentResult:
     sin_asignar += [
         ActividadSinAsignar(
             actividad=atendibles[i],
-            motivo="No cabe en la jornada de los técnicos seleccionados",
+            motivo="No cabe en la jornada de los técnicos disponibles",
         )
         for i in descartadas
     ]
@@ -545,6 +546,55 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
     return _resultado("contratistas", request, rutas, recomendaciones, sin_asignar, extra)
 
 
+def _decisiones(
+    request: AssignmentRequest,
+    rutas: List[RutaAsignada],
+    recomendaciones: List[RecomendacionContratista],
+    sin_asignar: List[ActividadSinAsignar],
+    motivos_previos: Dict[str, str],
+) -> List[DecisionOT]:
+    """Una decisión por OT: a quién enviarla y por qué, en el orden en que llegaron"""
+    dist = Distancias(request.jornada)
+    por_codigo = {r.codigo_bia: r for r in recomendaciones}
+    decisiones: Dict[str, DecisionOT] = {}
+
+    for asignada in rutas:
+        sede = asignada.sede
+        for parada in asignada.ruta.paradas:
+            actividad = parada.actividad
+            km = round(dist.km(sede.coordinates, actividad.coordinates), 1)
+            if asignada.tipo == "tecnico":
+                motivo = f"A {km:g} km de {sede.empresa}; cabe en la jornada de {asignada.responsable}"
+            else:
+                recomendacion = por_codigo.get(actividad.codigo_bia)
+                if recomendacion and recomendacion.criterio == "sin_lista_or":
+                    motivo = f"Contratista más cercano ({km:g} km); el OR {actividad.or_operador} no tiene contratistas definidos"
+                else:
+                    motivo = f"Contratista de {actividad.or_operador} más cercano ({km:g} km)"
+                previo = motivos_previos.get(actividad.codigo_bia)
+                if previo:
+                    motivo = f"{previo}. {motivo}"
+            if not asignada.ruta.viable:
+                motivo += ". La ruta supera la jornada: requiere viaje"
+            decisiones[actividad.codigo_bia] = DecisionOT(
+                codigo_bia=actividad.codigo_bia,
+                enviar_a=asignada.tipo,
+                responsable_id=asignada.responsable_id,
+                responsable=asignada.responsable,
+                sede=f"{sede.empresa} ({sede.ciudad})",
+                distancia_base_km=km,
+                hora_llegada=parada.hora_llegada_estimada,
+                motivo=motivo,
+            )
+
+    for item in sin_asignar:
+        decisiones[item.actividad.codigo_bia] = DecisionOT(
+            codigo_bia=item.actividad.codigo_bia, enviar_a="sin_asignar", motivo=item.motivo
+        )
+
+    return [decisiones[a.codigo_bia] for a in request.actividades if a.codigo_bia in decisiones]
+
+
 def _resultado(
     modo: str,
     request: AssignmentRequest,
@@ -552,12 +602,15 @@ def _resultado(
     recomendaciones: List[RecomendacionContratista],
     sin_asignar: List[ActividadSinAsignar],
     extra: Dict,
+    motivos_previos: Optional[Dict[str, str]] = None,
 ) -> AssignmentResult:
     distancia = round(sum(r.ruta.distancia_total_km for r in rutas), 2)
     asignadas = sum(len(r.ruta.paradas) for r in rutas)
     costos = [r.costo for r in rutas if r.costo is not None]
     metricas = {
         "ots_asignadas": asignadas,
+        "ots_con_tecnicos": sum(len(r.ruta.paradas) for r in rutas if r.tipo == "tecnico"),
+        "ots_con_contratistas": sum(len(r.ruta.paradas) for r in rutas if r.tipo == "contratista"),
         "costo_total": round(sum(costos), 2) if costos else None,
         "ots_sin_asignar": len(sin_asignar),
         "rutas": len(rutas),
@@ -569,6 +622,7 @@ def _resultado(
         modo=modo,
         total_actividades=len(request.actividades),
         rutas=rutas,
+        decisiones=_decisiones(request, rutas, recomendaciones, sin_asignar, motivos_previos or {}),
         recomendaciones=recomendaciones,
         sin_asignar=sin_asignar,
         distancia_total_km=distancia,
@@ -577,7 +631,63 @@ def _resultado(
     )
 
 
+def asignar_automatico(request: AssignmentRequest) -> AssignmentResult:
+    """Primero técnicos in-house, luego contratistas.
+
+    Las OTs dentro del radio de alguna base Bia se reparten entre los técnicos
+    disponibles en su jornada; las que quedan lejos, no caben en la jornada o
+    piden más personas de las disponibles van al contratista más cercano de su OR.
+    """
+    sedes = {s.id: s for s in request.sedes}
+    tecnicos = [t for t in request.tecnicos if t.base_id in sedes]
+    actividades, sin_coordenadas = _separar_sin_coordenadas(request.actividades)
+    dist = Distancias(request.jornada)
+    radio = request.jornada.radio_inhouse_km
+
+    motivos_previos: Dict[str, str] = {}
+    rutas: List[RutaAsignada] = []
+    recomendaciones: List[RecomendacionContratista] = []
+    extra: Dict = {"tecnicos_disponibles": len(tecnicos), "radio_inhouse_km": radio}
+    pendientes = actividades
+
+    if tecnicos:
+        bases = [sedes[b] for b in dict.fromkeys(t.base_id for t in tecnicos)]
+        cerca: List[Activity] = []
+        lejos: List[Activity] = []
+        for actividad in actividades:
+            base, km = min(((b, dist.km(b.coordinates, actividad.coordinates)) for b in bases), key=lambda x: x[1])
+            if km <= radio:
+                cerca.append(actividad)
+            else:
+                lejos.append(actividad)
+                motivos_previos[actividad.codigo_bia] = (
+                    f"Está a {km:.0f} km de la base con técnicos disponibles más cercana ({base.ciudad}), "
+                    f"fuera del radio de {radio:g} km"
+                )
+        pendientes = lejos
+        if cerca:
+            inhouse = asignar_inhouse(request.model_copy(update={"actividades": cerca, "tecnicos": tecnicos}))
+            rutas += inhouse.rutas
+            for item in inhouse.sin_asignar:
+                motivos_previos[item.actividad.codigo_bia] = item.motivo
+                pendientes.append(item.actividad)
+            extra.update({k: inhouse.metricas[k] for k in ("cuadrillas_armadas", "parejas", "cuadrillas_manuales")})
+    else:
+        for actividad in actividades:
+            motivos_previos[actividad.codigo_bia] = "No hay técnicos disponibles"
+
+    if pendientes:
+        contratistas = asignar_contratistas(request.model_copy(update={"actividades": pendientes}))
+        rutas += contratistas.rutas
+        recomendaciones = contratistas.recomendaciones
+        extra.update({k: contratistas.metricas[k] for k in ("ots_por_contratista", "ots_sin_lista_or")})
+
+    return _resultado("automatico", request, rutas, recomendaciones, sin_coordenadas, extra, motivos_previos)
+
+
 def asignar(request: AssignmentRequest) -> AssignmentResult:
+    if request.modo == "automatico":
+        return asignar_automatico(request)
     if request.modo == "inhouse":
         return asignar_inhouse(request)
     return asignar_contratistas(request)

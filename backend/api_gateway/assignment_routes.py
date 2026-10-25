@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, status
@@ -19,6 +19,7 @@ from shared.models import (
     AssignmentRequest,
     AssignmentResult,
     JornadaConfig,
+    ModoAsignacion,
     SedeOperativa,
 )
 from shared.utils import setup_logging
@@ -75,7 +76,7 @@ class OTsResponse(BaseModel):
 
 
 class AsignarRequest(BaseModel):
-    modo: Literal["inhouse", "contratistas"]
+    modo: ModoAsignacion = "automatico"
     actividades: List[Activity]
     or_filtro: List[str] = Field(default_factory=list)  # Vacío = todos los OR
     tecnicos_ids: List[str] = Field(default_factory=list)
@@ -86,10 +87,15 @@ class AsignarRequest(BaseModel):
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
+def pregunta_predeterminada() -> Optional[str]:
+    """La pregunta guardada en la app manda sobre METABASE_CARD_ID del .env"""
+    return leer_config().card_id or settings.METABASE_CARD_ID or None
+
+
 @router.get("/metabase/estado", response_model=dict)
 async def metabase_estado():
     """Estado de la conexión con Metabase (sin credenciales)"""
-    return metabase.estado()
+    return {**metabase.estado(), "card_id": pregunta_predeterminada()}
 
 
 @router.get("/metabase/ots", response_model=OTsResponse)
@@ -98,11 +104,11 @@ async def metabase_ots(card_id: Optional[str] = None):
     Trae las OTs de una pregunta de Metabase y las convierte al formato del optimizador.
     Las OTs sin GPS se geocodifican a partir de su dirección.
     """
-    card = card_id or settings.METABASE_CARD_ID
+    card = card_id or pregunta_predeterminada()
     if not card:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Indica el id de la pregunta de Metabase o configura METABASE_CARD_ID",
+            detail="Indica el número de la pregunta de Metabase y guárdalo como predeterminado",
         )
     try:
         filas = await metabase.consultar_pregunta(card)
@@ -156,6 +162,13 @@ async def actualizar_config(config: AsignacionConfig):
     """Guarda técnicos in-house y contratistas por OR"""
     sedes = {s.id for s in obtener_catalogo()["sedes"]}
     empresas = {s.empresa_id for s in obtener_catalogo()["sedes"] if s.tipo == "contratista"}
+    if config.card_id is not None:
+        config.card_id = config.card_id.strip() or None
+        if config.card_id and not config.card_id.isdigit():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La pregunta de Metabase debe ser el número que aparece en /question/123-...",
+            )
     ids = [t.id for t in config.tecnicos]
     if len(ids) != len(set(ids)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hay técnicos con el mismo id")
@@ -197,10 +210,10 @@ async def asignar(request: AsignarRequest):
     config = leer_config()
     tecnicos = []
     cuadrillas: List[List[str]] = []
-    if request.modo == "inhouse":
+    if request.modo in ("inhouse", "automatico"):
         por_id = {t.id: t for t in config.tecnicos}
         tecnicos = [por_id[i] for i in request.tecnicos_ids if i in por_id]
-        if not tecnicos:
+        if not tecnicos and request.modo == "inhouse":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un técnico")
         seleccionados = {t.id for t in tecnicos}
         cuadrillas = [[i for i in grupo if i in seleccionados] for grupo in request.cuadrillas]

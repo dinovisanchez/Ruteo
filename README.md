@@ -151,6 +151,14 @@ El sistema está compuesto por **6 servicios principales** que trabajan de forma
 
 ## 📦 Instalación y Ejecución
 
+### Inicio rápido sin Docker (Mac/Linux)
+
+```bash
+./iniciar.sh
+```
+
+Crea el entorno de Python la primera vez, reinicia los 4 servicios del backend (registros en `logs/`) y abre el frontend en http://localhost:3000. Ctrl+C detiene todo. Úsalo también después de cada `git pull`: así el backend siempre corre la versión nueva.
+
 ### Requisitos Previos
 
 - **Docker** 20.10 o superior
@@ -286,136 +294,36 @@ BIA003,instalacion,"4.6200,-74.0900",Cliente 3,Carrera 789 #12-34,Bogotá,Cundin
 
 ## 🚀 Uso de la Aplicación
 
-La aplicación ofrece dos modos principales de optimización:
+Ruteo es una sola pantalla: pulsa **Extraer y recomendar** y la app trae las OTs pendientes de la pregunta de Metabase y dice **a quién enviar cada una y por qué**.
 
-### Modo 1: Optimización Estándar
+### Cómo decide (modo automático)
 
-Este modo optimiza todas las actividades en un solo proceso de optimización.
+1. **Técnicos in-house primero.** Las OTs a menos de *Radio técnicos* (40 km por defecto) de la base de algún técnico disponible se reparten entre los técnicos disponibles hoy, cada uno saliendo de su base y sin pasar de las **horas de trabajo** (8 por defecto, incluyendo desplazamientos y el regreso a la base). La carga se reparte de forma pareja.
+2. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base, o puedes fijarlas con el selector *Pareja*.
+3. **Contratistas para el resto.** Las OTs lejos de las bases, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que atienden su OR** (*Contratistas por OR*; si el OR no tiene lista, el más cercano de todos). Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
 
-1. **Cargar Archivo**
-   - Accede a http://localhost:3000
-   - Arrastra y suelta un archivo Excel o CSV
-   - O haz clic para seleccionar el archivo
-   - El sistema valida y muestra una vista previa
+El resultado muestra la tabla **¿A quién enviar cada OT?** (responsable, de dónde sale, distancia, hora de llegada, motivo y otras opciones), el mapa, las rutas de cada técnico o cuadrilla con su costo, y todas las columnas de la pregunta. Todo se descarga en CSV. En *Ajustes* se puede cambiar a *Solo técnicos* o *Solo contratistas*, filtrar por OR y ajustar la jornada.
 
-2. **Configurar Parámetros**
-   - **Nombre del lote**: Identificador del lote de actividades
-   - **Horario laboral**:
-     - Hora de inicio (ej: 08:00)
-     - Hora de fin (ej: 17:00)
-     - Horas laborales totales (ej: 8.0)
-   - **Velocidad promedio**: Velocidad de desplazamiento en km/h (ej: 30)
-   - **Punto de partida**: Coordenadas GPS del punto de inicio (lat,lon)
-   - **Tiempos de servicio**: Duración en minutos por tipo de servicio
-     - Ej: instalacion: 60 minutos
-     - Ej: mantenimiento: 45 minutos
-   - **Capacidad máxima** (opcional): Límite de actividades por cuadrilla
+### Configuración
 
-3. **Optimizar Rutas**
-   - Haz clic en "Optimizar Rutas"
-   - El sistema procesa:
-     - Validación de datos
-     - Cálculo de distancias
-     - Clustering geográfico
-     - Optimización de rutas
-   - Los resultados se muestran en segundos o minutos dependiendo del tamaño
-
-4. **Visualizar Resultados**
-   - **Métricas generales**:
-     - Total de actividades
-     - Cuadrillas necesarias
-     - Distancia total
-     - Utilización promedio
-     - Viabilidad en un día
-   - **Mapa interactivo**:
-     - Marcadores numerados por secuencia
-     - Rutas coloreadas por cuadrilla
-     - Popups con información detallada
-   - **Tabla de rutas**:
-     - Detalles de cada cuadrilla
-     - Horarios de llegada y salida
-     - Distancias y tiempos
-     - Exportación a JSON
-
-### Modo 2: Lotes por Proximidad
-
-Este modo agrupa actividades por proximidad geográfica y optimiza cada lote independientemente, ideal para distribuir trabajo en zonas específicas.
-
-1. **Cargar Archivo** (igual que el Modo 1)
-
-2. **Configurar Parámetros de Proximidad**
-   - **Distancia máxima**: Distancia en km para agrupar actividades (ej: 20 km)
-   - **Método de clustering**: 
-     - **Proximidad**: Agrupa actividades cercanas entre sí
-     - **K-means**: Agrupa usando clustering geográfico K-means
-   - El sistema usa configuración por defecto para tiempos de servicio
-
-3. **Generar Lotes y Optimizar**
-   - Haz clic en "Generar Lotes por Proximidad"
-   - El sistema:
-     - Analiza la proximidad geográfica de las actividades
-     - Crea lotes basados en la distancia máxima
-     - Optimiza la ruta de cada lote independientemente
-     - Calcula métricas por lote y globales
-
-4. **Visualizar Resultados de Lotes**
-   - **Resumen de lotes**:
-     - Total de lotes generados
-     - Actividades por lote
-     - Métricas de cada lote (distancia, tiempo, viabilidad)
-     - Tabla detallada con información geográfica
-   
-   - **Panel de selección de lotes**:
-     - Checkboxes para seleccionar qué lotes visualizar
-     - Información de cada lote (actividades, distancia, viabilidad)
-     - Botones para seleccionar/deseleccionar todos
-     - Contador de lotes seleccionados
-   
-   - **Mapa interactivo de lotes**:
-     - Visualización de rutas de los lotes seleccionados
-     - Cada lote con un color único
-     - Marcadores numerados por secuencia en cada ruta
-     - Punto de partida optimizado por lote
-     - Polylines coloreadas mostrando la ruta completa
-     - Leyenda con información de lotes visibles
-     - Popups con detalles de cada parada
-   
-   - **Detalles expandibles**:
-     - Información completa de cada lote
-     - Lista de actividades por lote
-     - Métricas de ruta optimizada
-     - Exportación de resultados a JSON
-
-### Modo 3: Asignación por OR (Metabase)
-
-Pestaña **Asignación OR**. Trae las OTs de una pregunta de Metabase, las filtra por OR y decide quién las atiende:
-
-- **Técnicos in-house**: marcas los técnicos que salen ese día y cada uno sale desde su base de Bia. Las OTs se reparten entre ellos de forma equilibrada; las que no caben en la jornada quedan como *sin asignar*.
-- **Contratistas**: para cada OT se elige la sede más cercana entre los contratistas que atienden su OR (se definen en **Contratistas por OR**). Si el OR no tiene lista, se elige el más cercano de todos. Luego se arman las cuadrillas mínimas de cada sede para que todo quepa en la jornada; las OTs que ni solas caben en un día quedan en un *viaje de más de una jornada*.
-
-**1. Configurar Metabase** — copia `backend/.env.example` como `backend/.env` y completa:
+**1. Metabase** — en `backend/.env` (se crea desde `backend/.env.example` la primera vez que corres `./iniciar.sh`):
 
 ```env
 METABASE_URL=https://metabase.tu-empresa.com
 METABASE_API_KEY=...            # o METABASE_USERNAME / METABASE_PASSWORD
-METABASE_CARD_ID=123            # el número en la URL /question/123-...
 ```
 
-La pregunta debe tener, como mínimo, una columna con el código de la OT y otra con el OR. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Municipio`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**. Los nombres de columna en español se reconocen solos (OT, Orden de trabajo, Operador de red, Tipo de servicio, Municipio, Dirección…); si no, defínelos con `METABASE_COLUMN_MAP`.
+El número de la pregunta se escribe en la app y se guarda con **Predeterminar** (también se puede poner en `METABASE_CARD_ID`). La pregunta necesita una columna con el OR; el código de la OT (`Bia Code`, `OT`…) es recomendable. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Ciudad`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**. Los nombres de columna en español se reconocen solos; si no, defínelos con `METABASE_COLUMN_MAP`.
 
 **2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.
 
-**3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`:
-- **Técnicos in-house**: nombre, base (por defecto Bia Bogotá) y **costo por día**. El resultado muestra el costo de cada cuadrilla y el total.
-- **Tipos de OT**: minutos y **personas** de cada tipo. Por defecto Instalación, Emergencia y Normalización medida piden 2 personas. Esas OTs solo se asignan a parejas: la app sugiere las parejas que hacen falta en cada base, o puedes armarlas a mano con el selector *Pareja* junto a cada técnico.
+**3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`: técnicos con base (por defecto Bia Bogotá) y **costo por día**; contratistas que atienden cada OR; minutos y **personas** de cada tipo de OT.
 
-La tabla **Todas las OTs** muestra todas las columnas que trae la pregunta de Metabase; en el resultado, cada OT se puede expandir para verlas, y el CSV las incluye.
+Con *Extraer y recomendar cada N min* la app vuelve a traer la pregunta sola y marca las OTs nuevas como **Nueva**.
 
-**4. Usar** — *Traer OTs* (o activa *Actualizar cada N min*: las OTs nuevas se marcan como **Nueva**), filtra por OR, elige *Técnicos in-house* o *Contratistas* y pulsa **Asignar**. El resultado se puede descargar en CSV.
+> Las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*), no por la red vial real.
 
-> Las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Jornada y tiempos de servicio*), no por la red vial real.
-
-Endpoints nuevos: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET|PUT /api/asignacion/config`, `POST /api/asignar`.
+Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET|PUT /api/asignacion/config`, `POST /api/asignar`.
 
 ---
 

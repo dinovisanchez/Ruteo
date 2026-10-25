@@ -442,6 +442,8 @@ class AsignacionConfig(BaseModel):
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
     # Nombre del tipo de OT (ej. "Instalación") → minutos y personas
     tipos_ot: Dict[str, TipoOT] = Field(default_factory=dict)
+    # Pregunta de Metabase que se extrae por defecto (el número en /question/123-...)
+    card_id: Optional[str] = None
 
 
 class JornadaConfig(BaseModel):
@@ -451,14 +453,19 @@ class JornadaConfig(BaseModel):
     velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
     # Las distancias son en línea recta; este factor las aproxima a distancia por vía
     factor_vial: float = Field(default=1.3, ge=1.0, le=3.0)
+    # En modo automático, las OTs más lejos que esto de toda base Bia van a contratistas
+    radio_inhouse_km: float = Field(default=40.0, gt=0)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     incluir_retorno: bool = True
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
 
 
+ModoAsignacion = Literal["automatico", "inhouse", "contratistas"]
+
+
 class AssignmentRequest(BaseModel):
     """Pedido de asignación que el gateway envía al optimizador"""
-    modo: Literal["inhouse", "contratistas"]
+    modo: ModoAsignacion
     actividades: List[Activity]
     sedes: List[SedeOperativa]
     tecnicos: List[Tecnico] = Field(default_factory=list)  # Solo los seleccionados
@@ -503,11 +510,24 @@ class ActividadSinAsignar(BaseModel):
     motivo: str
 
 
+class DecisionOT(BaseModel):
+    """A quién se recomienda enviar una OT y por qué"""
+    codigo_bia: str
+    enviar_a: Literal["tecnico", "contratista", "sin_asignar"]
+    responsable_id: Optional[str] = None
+    responsable: Optional[str] = None
+    sede: Optional[str] = None  # "Empresa (Ciudad)" de donde sale la cuadrilla
+    distancia_base_km: Optional[float] = None
+    hora_llegada: Optional[time] = None
+    motivo: str
+
+
 class AssignmentResult(BaseModel):
-    modo: Literal["inhouse", "contratistas"]
+    modo: ModoAsignacion
     fecha: datetime = Field(default_factory=datetime.now)
     total_actividades: int = Field(..., ge=0)
     rutas: List[RutaAsignada]
+    decisiones: List[DecisionOT] = Field(default_factory=list)
     recomendaciones: List[RecomendacionContratista] = Field(default_factory=list)
     sin_asignar: List[ActividadSinAsignar] = Field(default_factory=list)
     distancia_total_km: float = Field(..., ge=0)

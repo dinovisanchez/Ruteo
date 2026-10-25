@@ -191,12 +191,11 @@ def filas_a_actividades(
     """
     columnas = list(filas[0].keys()) if filas else []
     mapeo = resolver_mapeo(columnas, mapeo_manual if mapeo_manual is not None else _mapeo_configurado())
-    faltantes = [c for c in ("codigo_bia", "or_operador") if c not in mapeo]
-    if filas and faltantes:
+    if filas and "or_operador" not in mapeo:
         raise MetabaseError(
-            f"No encontré las columnas para {', '.join(faltantes)} en la pregunta. "
+            "No encontré la columna del OR en la pregunta. "
             f"Columnas disponibles: {', '.join(columnas)}. "
-            "Renómbralas en Metabase o defínelas en METABASE_COLUMN_MAP."
+            "Renómbrala como 'OR' en Metabase o defínela en METABASE_COLUMN_MAP."
         )
     tiene_ubicacion = "gps" in mapeo or ("latitud" in mapeo and "longitud" in mapeo) or "direccion" in mapeo
     if filas and not tiene_ubicacion:
@@ -206,11 +205,15 @@ def filas_a_actividades(
         )
 
     avisos: List[str] = []
+    if filas and "codigo_bia" not in mapeo:
+        avisos.append(
+            "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
+        )
     actividades: List[Activity] = []
     vistos = set()
     duplicadas = 0
     for numero, fila in enumerate(filas, start=1):
-        codigo = _texto(fila.get(mapeo["codigo_bia"]))
+        codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
         if not codigo:
             avisos.append(f"Fila {numero}: sin código de OT; se omite")
             continue

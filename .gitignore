@@ -90,7 +90,7 @@ Thumbs.db
 .DS_Store
 
 # Virtualenv creado al correr el backend sin Docker
-.venv/
+.venv
 
 # Catálogo de bases y contratistas (se versiona aunque *.csv esté ignorado)
 !backend/data/contratistas.csv
