@@ -420,6 +420,14 @@ class SedeOperativa(BaseModel):
     coordinates: GPSCoordinates
 
 
+class OperadorRed(BaseModel):
+    """Operador de Red (OR) y los departamentos donde distribuye energía"""
+    nombre: str
+    alias: List[str] = Field(default_factory=list)  # Otras formas en que aparece el nombre
+    departamentos: List[str] = Field(default_factory=list)
+    notas: str = ""
+
+
 class Tecnico(BaseModel):
     """Técnico in-house que sale desde una base"""
     id: str
@@ -472,6 +480,8 @@ class AssignmentRequest(BaseModel):
     # Cuadrillas armadas a mano (ids de técnicos); vacío = la app las sugiere
     cuadrillas: List[List[str]] = Field(default_factory=list)
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
+    # Catálogo de OR: sin lista manual, el contratista sale de los departamentos que atiende el OR
+    operadores: List[OperadorRed] = Field(default_factory=list)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
@@ -487,9 +497,13 @@ class RecomendacionContratista(BaseModel):
     codigo_bia: str
     or_operador: str
     elegido: Optional[OpcionContratista] = None
-    # "lista_or": se eligió entre los contratistas definidos para ese OR
-    # "sin_lista_or": el OR no tiene contratistas definidos, se eligió entre todos
-    criterio: Literal["lista_or", "sin_lista_or"]
+    # "lista_or": entre los contratistas definidos a mano para ese OR
+    # "departamento_or": entre los que tienen sede en los departamentos que atiende el OR
+    # "departamento_ot": el OR no está en el catálogo; entre los que tienen sede en el departamento de la OT
+    # "sin_lista_or": ningún contratista tiene sede en la zona; el más cercano de todos
+    criterio: Literal["lista_or", "departamento_or", "departamento_ot", "sin_lista_or"]
+    or_canonico: Optional[str] = None  # Nombre del OR en el catálogo, si se reconoció
+    zona: Optional[str] = None  # Departamentos considerados, para explicar la elección
     alternativas: List[OpcionContratista] = Field(default_factory=list)
 
 

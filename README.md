@@ -300,7 +300,7 @@ Ruteo es una sola pantalla: pulsa **Extraer y recomendar** y la app trae las OTs
 
 1. **Técnicos in-house primero.** Las OTs a menos de *Radio técnicos* (40 km por defecto) de la base de algún técnico disponible se reparten entre los técnicos disponibles hoy, cada uno saliendo de su base y sin pasar de las **horas de trabajo** (8 por defecto, incluyendo desplazamientos y el regreso a la base). La carga se reparte de forma pareja.
 2. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base, o puedes fijarlas con el selector *Pareja*.
-3. **Contratistas para el resto.** Las OTs lejos de las bases, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que atienden su OR** (*Contratistas por OR*; si el OR no tiene lista, el más cercano de todos). Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
+3. **Contratistas para el resto.** Las OTs lejos de las bases, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que pueden atender su OR**, en este orden: la lista que fijes a mano en *Contratistas por OR*; si no hay, los contratistas con sede en los **departamentos donde opera el OR** (catálogo `backend/data/operadores_red.csv`, que reconoce variantes como "ENEL COLOMBIA S.A. E.S.P." o "Codensa"); si el OR no está en el catálogo, los del departamento de la OT; y si nadie tiene sede en la zona, el más cercano de todos. Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
 
 El resultado muestra la tabla **¿A quién enviar cada OT?** (responsable, de dónde sale, distancia, hora de llegada, motivo y otras opciones), el mapa, las rutas de cada técnico o cuadrilla con su costo, y todas las columnas de la pregunta. Todo se descarga en CSV. En *Ajustes* se puede cambiar a *Solo técnicos* o *Solo contratistas*, filtrar por OR y ajustar la jornada.
 
@@ -317,13 +317,15 @@ El número de la pregunta se escribe en la app y se guarda con **Predeterminar**
 
 **2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.
 
-**3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`: técnicos con base (por defecto Bia Bogotá) y **costo por día**; contratistas que atienden cada OR; minutos y **personas** de cada tipo de OT.
+**3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`: técnicos con base (por defecto Bia Bogotá) y **costo por día**; contratistas que atienden cada OR; minutos y **personas** de cada tipo de OT. Los técnicos de la pestaña *Tecnicos* de la hoja están en `backend/data/tecnicos.csv` (base *Costa* = Bia Barranquilla, *Bogota* = Bia Bogotá): se cargan solos la primera vez y, si faltan, con el botón *Agregar técnicos de la hoja*.
+
+**4. Operadores de Red** — `backend/data/operadores_red.csv` lista los OR de Colombia, los nombres con que pueden aparecer y los departamentos que atienden. Es una versión inicial: revísala y ajústala si algún OR atiende otros departamentos.
 
 Con *Extraer y recomendar cada N min* la app vuelve a traer la pregunta sola y marca las OTs nuevas como **Nueva**.
 
 > Las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*), no por la red vial real.
 
-Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET|PUT /api/asignacion/config`, `POST /api/asignar`.
+Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar`.
 
 ---
 

@@ -126,4 +126,25 @@ export const assignActivities = async (request) => {
   return response.data;
 };
 
+/**
+ * Network operators (OR) with the departments they serve and the contractors based there
+ * @param {string[]} nombres - OR names as they appear in the OTs, to match them to the catalog
+ * @returns {Promise<Object>} { operadores: [{ nombre, departamentos, notas, empresas_auto }], resueltos }
+ */
+export const getOperators = async (nombres = []) => {
+  const params = new URLSearchParams();
+  nombres.forEach((n) => params.append('nombres', n));
+  const response = await apiClient.get('/operadores', { params });
+  return response.data;
+};
+
+/**
+ * Technicians listed in the "Tecnicos" tab of the contractors sheet
+ * @returns {Promise<Object[]>} [{ id, nombre, base_id }]
+ */
+export const getSheetTechnicians = async () => {
+  const response = await apiClient.get('/tecnicos/hoja');
+  return response.data;
+};
+
 export default apiClient;

@@ -17,6 +17,7 @@ from shared.models import (
     CrewRoute,
     GPSCoordinates,
     JornadaConfig,
+    OperadorRed,
     OpcionContratista,
     RecomendacionContratista,
     RouteStop,
@@ -24,7 +25,7 @@ from shared.models import (
     SedeOperativa,
     Tecnico,
 )
-from shared.catalogo import normalizar_texto
+from shared.operadores import clave, normalizar_departamento, resolver_or
 from shared.config import settings
 from shared.utils import (
     add_minutes_to_time,
@@ -389,22 +390,59 @@ def asignar_inhouse(request: AssignmentRequest) -> AssignmentResult:
     return _resultado("inhouse", request, rutas, [], sin_asignar, extra)
 
 
+def _candidatas_contratista(
+    actividad: Activity,
+    sedes_contratistas: List[SedeOperativa],
+    or_contratistas: Dict[str, List[str]],
+    operadores: List[OperadorRed],
+) -> Tuple[List[SedeOperativa], str, Optional[OperadorRed], Optional[str]]:
+    """Sedes que pueden atender la OT, en este orden de preferencia:
+
+    1. La lista manual de contratistas de su OR.
+    2. Las sedes en los departamentos que atiende su OR (catálogo de OR).
+    3. Si el OR no está en el catálogo, las sedes en el departamento de la OT.
+    4. Todas, si ninguna de las anteriores tiene sedes.
+
+    Devuelve (sedes, criterio, OR del catálogo, zona considerada).
+    """
+    operador = resolver_or(actividad.or_operador, operadores)
+    lista = or_contratistas.get(clave(actividad.or_operador)) or (
+        or_contratistas.get(clave(operador.nombre)) if operador else None
+    )
+    if lista:
+        candidatas = [s for s in sedes_contratistas if s.empresa_id in set(lista)]
+        if candidatas:
+            return candidatas, "lista_or", operador, None
+
+    if operador and operador.departamentos:
+        zona = ", ".join(operador.departamentos)
+        departamentos = {normalizar_departamento(d) for d in operador.departamentos}
+        candidatas = [s for s in sedes_contratistas if normalizar_departamento(s.departamento) in departamentos]
+        if candidatas:
+            return candidatas, "departamento_or", operador, zona
+    elif actividad.departamento:
+        zona = actividad.departamento
+        departamento = normalizar_departamento(actividad.departamento)
+        candidatas = [s for s in sedes_contratistas if normalizar_departamento(s.departamento) == departamento]
+        if candidatas:
+            return candidatas, "departamento_ot", operador, zona
+    else:
+        zona = None
+
+    return sedes_contratistas, "sin_lista_or", operador, zona
+
+
 def recomendar_contratista(
     actividad: Activity,
     sedes_contratistas: List[SedeOperativa],
     or_contratistas: Dict[str, List[str]],
     dist: Distancias,
+    operadores: Optional[List[OperadorRed]] = None,
 ) -> RecomendacionContratista:
-    """Elige la sede más cercana entre los contratistas que atienden el OR de la OT.
-
-    Si el OR no tiene contratistas definidos se elige entre todos.
-    """
-    empresas_or = set(or_contratistas.get(normalizar_texto(actividad.or_operador), []))
-    candidatas = [s for s in sedes_contratistas if s.empresa_id in empresas_or]
-    criterio = "lista_or"
-    if not candidatas:
-        candidatas = sedes_contratistas
-        criterio = "sin_lista_or"
+    """Elige la sede más cercana entre los contratistas que pueden atender el OR de la OT"""
+    candidatas, criterio, operador, zona = _candidatas_contratista(
+        actividad, sedes_contratistas, or_contratistas, operadores or []
+    )
 
     # Una opción por empresa: su sede más cercana a la OT
     mejor_por_empresa: Dict[str, OpcionContratista] = {}
@@ -422,6 +460,8 @@ def recomendar_contratista(
         or_operador=actividad.or_operador,
         elegido=opciones[0] if opciones else None,
         criterio=criterio,
+        or_canonico=operador.nombre if operador else None,
+        zona=zona,
         alternativas=opciones[1:1 + MAX_ALTERNATIVAS],
     )
 
@@ -496,7 +536,7 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
     if not sedes_contratistas:
         raise ValueError("El catálogo no tiene sedes de contratistas")
     sedes = {s.id: s for s in sedes_contratistas}
-    or_contratistas = {normalizar_texto(k): v for k, v in request.or_contratistas.items()}
+    or_contratistas = {clave(k): v for k, v in request.or_contratistas.items()}
 
     actividades, sin_asignar = _separar_sin_coordenadas(request.actividades)
     dist = Distancias(request.jornada)
@@ -504,7 +544,9 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
     recomendaciones = []
     por_sede: Dict[str, List[Activity]] = {}
     for actividad in actividades:
-        recomendacion = recomendar_contratista(actividad, sedes_contratistas, or_contratistas, dist)
+        recomendacion = recomendar_contratista(
+            actividad, sedes_contratistas, or_contratistas, dist, request.operadores
+        )
         recomendaciones.append(recomendacion)
         por_sede.setdefault(recomendacion.elegido.sede_id, []).append(actividad)
 
@@ -546,6 +588,30 @@ def asignar_contratistas(request: AssignmentRequest) -> AssignmentResult:
     return _resultado("contratistas", request, rutas, recomendaciones, sin_asignar, extra)
 
 
+def _motivo_contratista(
+    recomendacion: Optional[RecomendacionContratista],
+    actividad: Activity,
+    sede: SedeOperativa,
+    km: float,
+) -> str:
+    nombre_or = (recomendacion.or_canonico if recomendacion else None) or actividad.or_operador
+    criterio = recomendacion.criterio if recomendacion else "lista_or"
+    if criterio == "lista_or":
+        return f"Contratista definido para {nombre_or}, el más cercano ({km:g} km)"
+    if criterio == "departamento_or":
+        return (
+            f"{nombre_or} opera en {recomendacion.zona}; contratista con sede en {sede.departamento}, "
+            f"el más cercano ({km:g} km)"
+        )
+    if criterio == "departamento_ot":
+        return (
+            f"{actividad.or_operador} no está en el catálogo de OR; contratista con sede en "
+            f"{recomendacion.zona}, el más cercano ({km:g} km)"
+        )
+    zona = f" ({recomendacion.zona})" if recomendacion and recomendacion.zona else ""
+    return f"Ningún contratista tiene sede en la zona de {nombre_or}{zona}; el más cercano de todos ({km:g} km)"
+
+
 def _decisiones(
     request: AssignmentRequest,
     rutas: List[RutaAsignada],
@@ -566,11 +632,7 @@ def _decisiones(
             if asignada.tipo == "tecnico":
                 motivo = f"A {km:g} km de {sede.empresa}; cabe en la jornada de {asignada.responsable}"
             else:
-                recomendacion = por_codigo.get(actividad.codigo_bia)
-                if recomendacion and recomendacion.criterio == "sin_lista_or":
-                    motivo = f"Contratista más cercano ({km:g} km); el OR {actividad.or_operador} no tiene contratistas definidos"
-                else:
-                    motivo = f"Contratista de {actividad.or_operador} más cercano ({km:g} km)"
+                motivo = _motivo_contratista(por_codigo.get(actividad.codigo_bia), actividad, sede, km)
                 previo = motivos_previos.get(actividad.codigo_bia)
                 if previo:
                     motivo = f"{previo}. {motivo}"

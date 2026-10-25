@@ -5,13 +5,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from collections import Counter
 from pathlib import Path
+import csv
 from typing import Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from shared.catalogo import cargar_catalogo, normalizar_texto
+from shared.operadores import cargar_operadores, clave, normalizar_departamento, resolver_or
 from shared.config import settings
 from shared.models import (
     Activity,
@@ -20,7 +22,9 @@ from shared.models import (
     AssignmentResult,
     JornadaConfig,
     ModoAsignacion,
+    OperadorRed,
     SedeOperativa,
+    Tecnico,
 )
 from shared.utils import setup_logging
 from . import metabase
@@ -34,7 +38,13 @@ CONFIG_PATH = Path(settings.ASIGNACION_CONFIG_PATH) if settings.ASIGNACION_CONFI
     Path(__file__).resolve().parent.parent / "data" / "asignacion.json"
 )
 
+TECNICOS_HOJA_PATH = Path(__file__).resolve().parent.parent / "data" / "tecnicos.csv"
+# Nombre de la base en la pestaña "Tecnicos" de la hoja → base Bia del catálogo
+BASES_POR_NOMBRE = {"costa": "bia-barranquilla", "caribe": "bia-barranquilla", "barranquilla": "bia-barranquilla",
+                    "bogota": "bia-bogota"}
+
 _catalogo: Optional[Dict] = None
+_operadores: Optional[List[OperadorRed]] = None
 
 
 def obtener_catalogo(recargar: bool = False) -> Dict:
@@ -46,9 +56,32 @@ def obtener_catalogo(recargar: bool = False) -> Dict:
     return _catalogo
 
 
+def obtener_operadores() -> List[OperadorRed]:
+    global _operadores
+    if _operadores is None:
+        _operadores = cargar_operadores()
+        logger.info(f"Catálogo de OR cargado: {len(_operadores)} operadores")
+    return _operadores
+
+
+def tecnicos_de_la_hoja() -> List[Tecnico]:
+    """Técnicos de la pestaña "Tecnicos" de la hoja (data/tecnicos.csv), con su base Bia"""
+    if not TECNICOS_HOJA_PATH.exists():
+        return []
+    tecnicos = []
+    with TECNICOS_HOJA_PATH.open(encoding="utf-8") as archivo:
+        for fila in csv.DictReader(archivo):
+            nombre = (fila.get("Nombre") or "").strip()
+            base_id = BASES_POR_NOMBRE.get(clave(fila.get("Base") or ""))
+            if nombre and base_id:
+                tecnicos.append(Tecnico(id=f"hoja-{clave(nombre).replace(' ', '-')}", nombre=nombre, base_id=base_id))
+    return tecnicos
+
+
 def leer_config() -> AsignacionConfig:
+    # La primera vez, los técnicos salen de la hoja
     if not CONFIG_PATH.exists():
-        return AsignacionConfig()
+        return AsignacionConfig(tecnicos=tecnicos_de_la_hoja())
     return AsignacionConfig.model_validate_json(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
@@ -151,6 +184,40 @@ async def catalogo(recargar: bool = False):
     }
 
 
+@router.get("/operadores", response_model=dict)
+async def operadores(nombres: List[str] = Query(default=[])):
+    """
+    Catálogo de Operadores de Red con los departamentos que atienden y los contratistas
+    con sede en esos departamentos. Con `nombres`, dice a qué OR del catálogo corresponde
+    cada nombre que aparece en las OTs.
+    """
+    sedes = [s for s in obtener_catalogo()["sedes"] if s.tipo == "contratista"]
+    catalogo_or = obtener_operadores()
+
+    def empresas_en(departamentos: List[str]) -> List[str]:
+        claves = {normalizar_departamento(d) for d in departamentos}
+        return list(dict.fromkeys(s.empresa_id for s in sedes if normalizar_departamento(s.departamento) in claves))
+
+    resueltos = {}
+    for nombre in nombres:
+        operador = resolver_or(nombre, catalogo_or)
+        resueltos[nombre] = operador.nombre if operador else None
+
+    return {
+        "operadores": [
+            {**op.model_dump(), "empresas_auto": empresas_en(op.departamentos)}
+            for op in catalogo_or
+        ],
+        "resueltos": resueltos,
+    }
+
+
+@router.get("/tecnicos/hoja", response_model=List[Tecnico])
+async def tecnicos_hoja():
+    """Técnicos de la pestaña "Tecnicos" de la hoja, listos para agregar"""
+    return tecnicos_de_la_hoja()
+
+
 @router.get("/asignacion/config", response_model=AsignacionConfig)
 async def obtener_config():
     """Técnicos in-house y contratistas por OR"""
@@ -226,6 +293,7 @@ async def asignar(request: AsignarRequest):
         tecnicos=tecnicos,
         cuadrillas=cuadrillas,
         or_contratistas=config.or_contratistas,
+        operadores=obtener_operadores(),
         jornada=request.jornada,
     )
     try:

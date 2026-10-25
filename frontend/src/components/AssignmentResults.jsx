@@ -201,7 +201,7 @@ const AssignmentResults = ({ result, ots, nuevas, incluirRetorno }) => {
             type="warning"
             showIcon
             icon={<WarningOutlined />}
-            message={`${metricas.ots_sin_lista_or} OTs son de OR sin contratistas definidos: se eligió el más cercano de todos. Defínelos en «Contratistas por OR».`}
+            message={`${metricas.ots_sin_lista_or} OTs son de OR sin contratistas con sede en su zona: se eligió el más cercano de todos. Revisa «Contratistas por OR».`}
           />
         )}
         <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>

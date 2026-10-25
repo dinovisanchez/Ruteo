@@ -9,12 +9,13 @@ import {
 import dayjs from 'dayjs';
 
 import TechniciansModal from './TechniciansModal';
-import OrContractorsModal from './OrContractorsModal';
+import OrContractorsModal, { buildOrRows } from './OrContractorsModal';
 import OtTypesModal from './OtTypesModal';
 import {
   getMetabaseStatus, fetchMetabaseOTs, getCatalog, getAssignmentConfig, saveAssignmentConfig, uploadFile,
+  getOperators, getSheetTechnicians,
 } from '../services/api';
-import { otTypeSettings } from '../services/otTypes';
+import { otTypeSettings, normalizeText } from '../services/otTypes';
 import { formatCop } from '../services/format';
 
 const { Text } = Typography;
@@ -61,6 +62,8 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   const [techModalOpen, setTechModalOpen] = useState(false);
   const [orModalOpen, setOrModalOpen] = useState(false);
   const [typesModalOpen, setTypesModalOpen] = useState(false);
+  const [orInfo, setOrInfo] = useState({ operadores: [], resueltos: {} });
+  const [hojaTecnicos, setHojaTecnicos] = useState([]);
   const knownRef = useRef(null);
 
   useEffect(() => {
@@ -72,11 +75,33 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       .catch(() => setStatus({ configurado: false, sinBackend: true }));
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
     getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
+    getSheetTechnicians().then(setHojaTecnicos).catch(() => setHojaTecnicos([]));
   }, [onConfigChange]);
 
   const orCounts = useMemo(() => countBy(ots, 'or_operador'), [ots]);
   const serviceCounts = useMemo(() => countBy(ots, 'servicio'), [ots]);
   const services = Object.keys(serviceCounts).sort();
+
+  // Match the OR names in the OTs to the catalog of network operators
+  const orNamesKey = Object.keys(orCounts).sort().join('|');
+  useEffect(() => {
+    getOperators(orNamesKey ? orNamesKey.split('|') : []).then(setOrInfo).catch(() => {});
+  }, [orNamesKey]);
+  const orRows = buildOrRows(orInfo.operadores, orInfo.resueltos, orCounts, config.or_contratistas)
+    .filter((r) => r.ots > 0);
+
+  const tecnicosFaltantes = hojaTecnicos.filter(
+    (t) => !config.tecnicos.some((x) => normalizeText(x.nombre) === normalizeText(t.nombre)),
+  );
+  const addSheetTechnicians = async () => {
+    try {
+      const saved = await saveAssignmentConfig({ ...config, tecnicos: [...config.tecnicos, ...tecnicosFaltantes] });
+      onConfigChange(saved);
+      message.success(`${tecnicosFaltantes.length} técnicos agregados desde la hoja`);
+    } catch (error) {
+      message.error(`No se pudieron agregar los técnicos: ${error.message}`);
+    }
+  };
   const sedesById = useMemo(() => Object.fromEntries(catalog.sedes.map((s) => [s.id, s])), [catalog]);
   const empresasById = useMemo(() => Object.fromEntries(catalog.empresas.map((e) => [e.id, e])), [catalog]);
 
@@ -105,11 +130,6 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   };
 
   const cuadrillasManuales = Object.entries(parejas).filter(([a, b]) => a < b).map(([a, b]) => [a, b]);
-
-  const contractorsFor = (orName) => {
-    const key = Object.keys(config.or_contratistas).find((k) => k.toLowerCase() === orName.toLowerCase());
-    return key ? config.or_contratistas[key] : [];
-  };
 
   const runAssign = async (actividades) => {
     if (!actividades?.length) return;
@@ -335,6 +355,11 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
             Sin técnicos registrados: todo se recomendará a contratistas. Agrégalos en «Gestionar».
           </Text>
         )}
+        {tecnicosFaltantes.length > 0 && (
+          <Button size="small" type="dashed" block style={{ marginTop: 8 }} onClick={addSheetTechnicians}>
+            Agregar {tecnicosFaltantes.length} técnicos de la hoja ({tecnicosFaltantes.map((t) => t.nombre.split(' ')[0]).join(', ')})
+          </Button>
+        )}
       </Card>
 
       <Card
@@ -343,19 +368,27 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
         style={{ marginBottom: 12 }}
         extra={<Button size="small" type="link" onClick={() => setOrModalOpen(true)}>Editar</Button>}
       >
-        {Object.keys(orCounts).length ? Object.keys(orCounts).sort().map((name) => {
-          const lista = contractorsFor(name);
-          return (
-            <div key={name} style={{ marginBottom: 6 }}>
-              <Text strong style={{ fontSize: 12 }}>{name} ({orCounts[name]}): </Text>
-              {lista.length ? lista.map((id) => <Tag key={id}>{empresasById[id]?.nombre || id}</Tag>) : (
-                <Tag icon={<WarningOutlined />} color="warning">el más cercano de todos</Tag>
+        {orRows.length ? orRows.map((r) => (
+          <div key={r.key} style={{ marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 12 }}>{r.nombre} ({r.ots})</Text>
+            {r.departamentos.length > 0 && (
+              <Text type="secondary" style={{ fontSize: 11 }}> · {r.departamentos.join(', ')}</Text>
+            )}
+            <div>
+              {r.manual.length > 0 && r.manual.map((id) => <Tag key={id} color="purple">{empresasById[id]?.nombre || id}</Tag>)}
+              {!r.manual.length && r.auto.length > 0 && r.auto.map((id) => (
+                <Tag key={id} bordered={false}>{empresasById[id]?.nombre || id}</Tag>
+              ))}
+              {!r.manual.length && !r.auto.length && (
+                <Tag icon={<WarningOutlined />} color="warning">
+                  {r.desconocido ? 'los de su departamento' : 'sin contratistas en la zona: el más cercano'}
+                </Tag>
               )}
             </div>
-          );
-        }) : (
+          </div>
+        )) : (
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Para cada OR, el contratista más cercano entre los que lo atienden.
+            Cada OT va al contratista más cercano con sede en los departamentos que atiende su OR.
           </Text>
         )}
       </Card>
@@ -478,7 +511,9 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
         open={orModalOpen}
         config={config}
         empresas={catalog.empresas}
-        orsPresentes={Object.keys(orCounts)}
+        operadores={orInfo.operadores}
+        resueltos={orInfo.resueltos}
+        orCounts={orCounts}
         onClose={() => setOrModalOpen(false)}
         onSaved={(saved) => { onConfigChange(saved); setOrModalOpen(false); }}
       />
