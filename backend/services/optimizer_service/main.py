@@ -16,12 +16,15 @@ from shared.models import (
     OptimizationResult,
     HealthResponse,
     ProximityClusteringResult,
-    ClusterOptimizationResult
+    ClusterOptimizationResult,
+    AssignmentRequest,
+    AssignmentResult
 )
 from shared.config import settings
 from shared.utils import setup_logging, get_service_time
 from .service import OptimizationService
 from .proximity_analysis import ProximityAnalysisService
+from .assignment import asignar
 
 # Setup logging
 logger = setup_logging("optimizer-service", settings.LOG_LEVEL)
@@ -349,6 +352,41 @@ async def optimize_by_clusters(request: ClusterOptimizationRequest):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Cluster optimization error: {str(e)}"
+        )
+
+
+@app.post("/assign", response_model=AssignmentResult)
+async def assign_activities(request: AssignmentRequest):
+    """
+    Assign activities to in-house technicians or to the nearest contractor of each OR
+    """
+    try:
+        logger.info(f"Assigning {len(request.actividades)} activities, mode: {request.modo}")
+
+        if not request.actividades:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No hay OTs para asignar"
+            )
+
+        result = asignar(request)
+
+        logger.info(
+            f"Assignment complete: {len(result.rutas)} routes, "
+            f"{len(result.sin_asignar)} unassigned, {result.distancia_total_km} km total"
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in assignment: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Assignment error: {str(e)}"
         )
 
 

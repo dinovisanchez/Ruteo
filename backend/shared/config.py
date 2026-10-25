@@ -56,9 +56,29 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Metabase: de dónde salen las OTs. Autenticación con API key o con usuario/contraseña
+    METABASE_URL: str = ""
+    METABASE_API_KEY: str = ""
+    METABASE_USERNAME: str = ""
+    METABASE_PASSWORD: str = ""
+    METABASE_CARD_ID: str = ""  # Id de la pregunta por defecto (el número en /question/123-...)
+    # JSON opcional campo → columna de Metabase, ej. {"codigo_bia": "OT", "or_operador": "Operador"}
+    METABASE_COLUMN_MAP: str = ""
+
+    # Catálogo de bases y contratistas (hoja "Data Contratista")
+    CONTRATISTAS_CSV_URL: str = ""  # CSV publicado de Google Sheets; si falla se usa el archivo local
+    CONTRATISTAS_CSV_PATH: str = ""  # Por defecto backend/data/contratistas.csv
+    # Técnicos y contratistas por OR que se editan desde la app
+    ASIGNACION_CONFIG_PATH: str = ""  # Por defecto backend/data/asignacion.json
+
+    # Geocodificación (Nominatim) para OTs que llegan sin GPS
+    GEOCODING_ENABLED: bool = True
+    GEOCODING_MAX_POR_CONSULTA: int = 30
+
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"  # El .env puede traer variables de otros componentes (ej. REACT_APP_*)
 
 
 # Global settings instance

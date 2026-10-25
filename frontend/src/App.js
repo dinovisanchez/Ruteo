@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { Layout, Typography, Space, Spin, message, Button, Tabs } from 'antd';
+import React, { useCallback, useState } from 'react';
+import { Layout, Typography, Space, Spin, message, Button, Tabs, Alert, Card, Empty } from 'antd';
 import {
   AppstoreOutlined,
   DownloadOutlined,
   ClusterOutlined,
   RocketOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons';
 
 import FileUploader from './components/FileUploader';
@@ -16,7 +17,9 @@ import RouteDetails from './components/RouteDetails';
 import ClusterResults from './components/ClusterResults';
 import ClusterMapView from './components/ClusterMapView';
 import ClusterSelectionPanel from './components/ClusterSelectionPanel';
-import { optimizeRoutes, analyzeProximity, optimizeByClusters } from './services/api';
+import AssignmentPanel from './components/AssignmentPanel';
+import AssignmentResults from './components/AssignmentResults';
+import { optimizeRoutes, analyzeProximity, optimizeByClusters, assignActivities } from './services/api';
 
 import './App.css';
 
@@ -33,6 +36,12 @@ function App() {
   const [siderCollapsed, setSiderCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState('standard');
   const [selectedClusters, setSelectedClusters] = useState([]);
+  const [assignmentOts, setAssignmentOts] = useState(null);
+  const [assignmentNuevas, setAssignmentNuevas] = useState(new Set());
+  const [assignmentSource, setAssignmentSource] = useState('');
+  const [assignmentResult, setAssignmentResult] = useState(null);
+  const [assignmentRetorno, setAssignmentRetorno] = useState(true);
+  const [assignedCodes, setAssignedCodes] = useState('');
 
   const handleUploadSuccess = (result) => {
     setActivities(result.activities);
@@ -142,8 +151,41 @@ function App() {
     }
   };
 
+  const handleOtsLoaded = useCallback((ots, nuevas, source) => {
+    setAssignmentOts(ots);
+    setAssignmentNuevas(nuevas);
+    setAssignmentSource(source);
+  }, []);
+
+  const handleAssign = async (request) => {
+    setLoading(true);
+    try {
+      message.loading({ content: 'Asignando OTs...', key: 'assign', duration: 0 });
+      const result = await assignActivities(request);
+      setAssignmentResult(result);
+      setAssignmentRetorno(request.jornada.incluir_retorno);
+      setAssignedCodes(request.actividades.map((a) => a.codigo_bia).sort().join('|'));
+      message.success({
+        content: `${result.metricas.ots_asignadas} OTs asignadas en ${result.rutas.length} rutas`,
+        key: 'assign',
+        duration: 5,
+      });
+    } catch (error) {
+      console.error('Assignment error:', error);
+      message.error({ content: `Error asignando: ${error.message}`, key: 'assign', duration: 10 });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const assignmentStale = Boolean(assignmentResult && assignmentOts)
+    && assignmentOts.map((a) => a.codigo_bia).sort().join('|') !== assignedCodes;
+
+  const resultForTab = { standard: optimizationResult, proximity: clusterResult, asignacion: assignmentResult };
+  const exportNames = { standard: 'rutas-optimizadas', proximity: 'lotes-proximidad', asignacion: 'asignacion-or' };
+
   const handleExportResults = () => {
-    const dataToExport = activeTab === 'standard' ? optimizationResult : clusterResult;
+    const dataToExport = resultForTab[activeTab];
 
     if (!dataToExport) {
       message.warning('No hay resultados para exportar');
@@ -156,7 +198,7 @@ function App() {
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${activeTab === 'standard' ? 'rutas-optimizadas' : 'lotes-proximidad'}-${new Date().toISOString().split('T')[0]}.json`;
+    link.download = `${exportNames[activeTab]}-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -176,7 +218,7 @@ function App() {
             </Title>
           </Space>
           <Space>
-            {(optimizationResult || clusterResult) && (
+            {resultForTab[activeTab] && (
               <Button
                 icon={<DownloadOutlined />}
                 onClick={handleExportResults}
@@ -208,7 +250,8 @@ function App() {
           onCollapse={setSiderCollapsed}
           breakpoint="lg"
         >
-          <div style={{ padding: 16 }}>
+          {/* Bottom padding so the sider collapse trigger does not cover the last button */}
+          <div style={{ padding: 16, paddingBottom: 72 }}>
             <FileUploader onUploadSuccess={handleUploadSuccess} />
 
             <Tabs
@@ -221,7 +264,7 @@ function App() {
                   label: (
                     <span>
                       <RocketOutlined />
-                      Optimización Estándar
+                      Estándar
                     </span>
                   ),
                   children: (
@@ -237,13 +280,31 @@ function App() {
                   label: (
                     <span>
                       <ClusterOutlined />
-                      Lotes por Proximidad
+                      Proximidad
                     </span>
                   ),
                   children: (
                     <ProximityPanel
                       activities={activities}
                       onAnalyze={handleProximityAnalyze}
+                      loading={loading}
+                    />
+                  ),
+                },
+                {
+                  key: 'asignacion',
+                  label: (
+                    <span>
+                      <ApartmentOutlined />
+                      Asignación OR
+                    </span>
+                  ),
+                  children: (
+                    <AssignmentPanel
+                      uploadedActivities={activities}
+                      ots={assignmentOts}
+                      onOtsLoaded={handleOtsLoaded}
+                      onAssign={handleAssign}
                       loading={loading}
                     />
                   ),
@@ -255,8 +316,31 @@ function App() {
 
         <Layout style={{ padding: '0 24px 24px' }}>
           <Content style={{ margin: '24px 0', minHeight: 280 }}>
-            <Spin spinning={loading} size="large" tip={activeTab === 'standard' ? 'Optimizando rutas...' : 'Generando lotes por proximidad...'}>
-              {activeTab === 'standard' ? (
+            <Spin spinning={loading} size="large" tip={{ standard: 'Optimizando rutas...', proximity: 'Generando lotes por proximidad...', asignacion: 'Asignando OTs (puede tardar hasta un minuto)...' }[activeTab]}>
+              {activeTab === 'asignacion' ? (
+                <>
+                  {assignmentSource && assignmentOts && (
+                    <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+                      Fuente: {assignmentSource} · {assignmentOts.length} OTs
+                    </Text>
+                  )}
+                  {assignmentStale && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                      message="Las OTs cambiaron desde la última asignación. Vuelve a pulsar Asignar para actualizar las rutas."
+                    />
+                  )}
+                  {assignmentResult ? (
+                    <AssignmentResults result={assignmentResult} nuevas={assignmentNuevas} incluirRetorno={assignmentRetorno} />
+                  ) : (
+                    <Card style={{ height: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Empty description="Trae OTs de Metabase, filtra por OR, elige técnicos o contratistas y pulsa Asignar" />
+                    </Card>
+                  )}
+                </>
+              ) : activeTab === 'standard' ? (
                 // Standard Optimization View
                 <>
                   <div style={{ marginBottom: 16 }}>
