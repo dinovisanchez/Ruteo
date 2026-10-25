@@ -7,8 +7,22 @@ LOGS="$RAIZ/logs"
 PATRON_BACKEND="uvicorn (api_gateway|services)\..*:app"
 mkdir -p "$LOGS"
 
-# Detiene el backend que siga corriendo (por ejemplo, el de antes de un git pull)
+# Detiene el backend y el frontend de esta carpeta que sigan corriendo (por ejemplo, de antes de un git pull)
 pkill -f "$PATRON_BACKEND" 2>/dev/null || true
+pkill -f "$RAIZ/frontend/node_modules" 2>/dev/null || true
+sleep 1
+
+# Si otro programa ocupa los puertos del backend (por ejemplo, un backend viejo de otra carpeta), avisa y para
+for puerto in 8000 8001 8002 8003; do
+  ocupado=$(lsof -nP -iTCP:"$puerto" -sTCP:LISTEN 2>/dev/null | tail -n +2)
+  if [ -n "$ocupado" ]; then
+    pid=$(echo "$ocupado" | awk '{print $2}' | head -n 1)
+    echo "El puerto $puerto está ocupado por otro programa (¿un backend viejo de otra carpeta?):"
+    echo "$ocupado"
+    echo "Ciérralo con:  kill $pid   y vuelve a ejecutar ./iniciar.sh"
+    exit 1
+  fi
+done
 
 cd "$RAIZ/backend"
 if [ ! -d .venv ]; then
@@ -48,7 +62,7 @@ if ! curl -s http://localhost:8000/api/metabase/estado | grep -q '"configurado":
   echo "Aviso: Metabase no está configurado. Completa METABASE_URL y METABASE_API_KEY en backend/.env (open -e backend/.env)."
 fi
 
-echo "Backend listo (registros en logs/). Abriendo el frontend en http://localhost:3000 ..."
+echo "Backend listo (registros en logs/). Abriendo el frontend: usa la dirección «Local:» que aparece abajo."
 cd "$RAIZ/frontend"
 [ -d node_modules ] || npm install
 npm start

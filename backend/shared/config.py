@@ -35,6 +35,8 @@ class Settings(BaseSettings):
         "http://localhost:8000",
         "http://frontend:3000"
     ]
+    # The dev server moves to 3001, 3002... when 3000 is busy; accept any local port
+    CORS_ORIGIN_REGEX: str = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
     # Optimization defaults
     DEFAULT_WORK_HOURS: float = 8.0
