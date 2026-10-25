@@ -18,9 +18,11 @@ logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
 # Nombres de columna que se reconocen automáticamente para cada campo de la OT
 ALIAS_COLUMNAS: Dict[str, List[str]] = {
-    "codigo_bia": ["codigo bia", "ot", "orden", "orden de trabajo", "orden trabajo", "numero ot", "no ot",
-                   "id ot", "codigo ot", "codigo", "frontera", "codigo frontera"],
-    "servicio": ["servicio", "tipo servicio", "tipo de servicio", "actividad", "tipo actividad",
+    # El código CO (Bia Code) va primero: es la llave que usa el resto del sistema
+    "codigo_bia": ["bia code", "co", "codigo bia", "ot", "orden", "orden de trabajo", "orden trabajo", "numero ot",
+                   "no ot", "id ot", "codigo ot", "codigo", "frontera", "codigo frontera"],
+    "servicio": ["tipo de ot", "tipo ot", "tipo de orden", "servicio", "tipo servicio", "tipo de servicio",
+                 "actividad", "tipo actividad",
                  "tipo de actividad", "maniobra", "tipo maniobra", "tipo"],
     "nombre": ["nombre", "cliente", "nombre cliente", "nombre del cliente", "razon social"],
     "direccion": ["direccion", "direccion ot", "direccion cliente", "address"],
@@ -220,7 +222,7 @@ def filas_a_actividades(
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
-            servicio=_texto(fila.get(mapeo.get("servicio", ""))).lower() or SERVICIO_POR_DEFECTO,
+            servicio=_texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO,
             gps=f"{coords.latitude},{coords.longitude}" if coords else "",
             nombre=_texto(fila.get(mapeo.get("nombre", ""))),
             direccion=_texto(fila.get(mapeo.get("direccion", ""))),
@@ -228,6 +230,7 @@ def filas_a_actividades(
             departamento=_texto(fila.get(mapeo.get("departamento", ""))),
             or_operador=_texto(fila.get(mapeo["or_operador"])) or "Sin OR",
             coordinates=coords,
+            extras=dict(fila),
         ))
     if duplicadas:
         avisos.append(f"{duplicadas} filas repetidas (mismo código de OT) se tomaron una sola vez")

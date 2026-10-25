@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Card, Button, Input, Space, Switch, InputNumber, Alert, Select, Segmented, Checkbox, Tag, Typography,
-  Form, TimePicker, Collapse, Divider, Empty, notification, message,
+  Form, TimePicker, Collapse, Empty, notification, message,
 } from 'antd';
 import {
   CloudDownloadOutlined, FileExcelOutlined, TeamOutlined, ApartmentOutlined, PlayCircleOutlined,
@@ -11,9 +11,12 @@ import dayjs from 'dayjs';
 
 import TechniciansModal from './TechniciansModal';
 import OrContractorsModal from './OrContractorsModal';
+import OtTypesModal from './OtTypesModal';
 import {
   getMetabaseStatus, fetchMetabaseOTs, getCatalog, getAssignmentConfig,
 } from '../services/api';
+import { otTypeSettings } from '../services/otTypes';
+import { formatCop } from '../services/format';
 
 const { Text } = Typography;
 
@@ -35,7 +38,7 @@ const writeKnownOts = (codes) => {
   }
 };
 
-const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loading }) => {
+const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loading, config, onConfigChange }) => {
   const [form] = Form.useForm();
   const [status, setStatus] = useState(null);
   const [cardId, setCardId] = useState('');
@@ -44,13 +47,14 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshMinutes, setRefreshMinutes] = useState(5);
   const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
-  const [config, setConfig] = useState({ tecnicos: [], or_contratistas: {} });
   const [orFilter, setOrFilter] = useState([]);
   const [modo, setModo] = useState('inhouse');
   const [selectedTecnicos, setSelectedTecnicos] = useState([]);
-  const [serviceTimes, setServiceTimes] = useState({});
+  // Manual pairs: technician id → partner id (both directions); empty = the app suggests crews
+  const [parejas, setParejas] = useState({});
   const [techModalOpen, setTechModalOpen] = useState(false);
   const [orModalOpen, setOrModalOpen] = useState(false);
+  const [typesModalOpen, setTypesModalOpen] = useState(false);
   const knownRef = useRef(null);
 
   useEffect(() => {
@@ -61,8 +65,8 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
       })
       .catch(() => setStatus({ configurado: false }));
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
-    getAssignmentConfig().then(setConfig).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
-  }, []);
+    getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
+  }, [onConfigChange]);
 
   const loadOts = useCallback(async (silent = false) => {
     setFetching(true);
@@ -77,7 +81,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
       writeKnownOts([...knownRef.current]);
 
       setFetchInfo(data);
-      onOtsLoaded(data.actividades, nuevas, `Metabase · pregunta ${data.card_id}`);
+      onOtsLoaded(data.actividades, nuevas, `Metabase · pregunta ${data.card_id}`, data.mapeo);
       if (nuevas.size && silent) {
         notification.info({
           message: `Llegaron ${nuevas.size} OTs nuevas`,
@@ -102,7 +106,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
 
   const handleUseUploaded = () => {
     setFetchInfo(null);
-    onOtsLoaded(uploadedActivities, new Set(), 'Archivo cargado');
+    onOtsLoaded(uploadedActivities, new Set(), 'Archivo cargado', {});
   };
 
   const orCounts = useMemo(() => {
@@ -111,15 +115,12 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
     return counts;
   }, [ots]);
 
-  const services = useMemo(() => [...new Set((ots || []).map((a) => a.servicio))].sort(), [ots]);
-
-  useEffect(() => {
-    setServiceTimes((prev) => {
-      const next = {};
-      services.forEach((s) => { next[s] = prev[s] || 60; });
-      return next;
-    });
-  }, [services]);
+  const serviceCounts = useMemo(() => {
+    const counts = {};
+    (ots || []).forEach((a) => { counts[a.servicio] = (counts[a.servicio] || 0) + 1; });
+    return counts;
+  }, [ots]);
+  const services = Object.keys(serviceCounts).sort();
 
   const tecnicosActivos = config.tecnicos.filter((t) => t.activo !== false);
   const sedesById = useMemo(() => Object.fromEntries(catalog.sedes.map((s) => [s.id, s])), [catalog]);
@@ -129,6 +130,31 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
   useEffect(() => {
     setSelectedTecnicos((prev) => prev.filter((id) => config.tecnicos.some((t) => t.id === id)));
   }, [config]);
+
+  // A pair only makes sense while both technicians are selected
+  useEffect(() => {
+    setParejas((prev) => Object.fromEntries(
+      Object.entries(prev).filter(([a, b]) => selectedTecnicos.includes(a) && selectedTecnicos.includes(b)),
+    ));
+  }, [selectedTecnicos]);
+
+  const toggleTecnico = (id, checked) => {
+    setSelectedTecnicos((prev) => (checked ? [...prev, id] : prev.filter((x) => x !== id)));
+  };
+
+  const setPareja = (id, partnerId) => {
+    setParejas((prev) => {
+      const next = { ...prev };
+      [id, partnerId, prev[id], prev[partnerId]].forEach((x) => { if (x) delete next[x]; });
+      if (partnerId) {
+        next[id] = partnerId;
+        next[partnerId] = id;
+      }
+      return next;
+    });
+  };
+
+  const cuadrillasManuales = Object.entries(parejas).filter(([a, b]) => a < b).map(([a, b]) => [a, b]);
 
   const contractorsFor = (orName) => {
     const key = Object.keys(config.or_contratistas).find((k) => k.toLowerCase() === orName.toLowerCase());
@@ -146,6 +172,8 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
       actividades: ots,
       or_filtro: orFilter,
       tecnicos_ids: modo === 'inhouse' ? selectedTecnicos : [],
+      cuadrillas: modo === 'inhouse' ? cuadrillasManuales : [],
+      personas_por_tipo: Object.fromEntries(services.map((s) => [s, otTypeSettings(s, config.tipos_ot).personas])),
       jornada: {
         horario_inicio: values.horario_inicio.format('HH:mm:ss'),
         horas_laborales: values.horas_laborales,
@@ -153,7 +181,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
         factor_vial: values.factor_vial,
         capacidad_maxima_actividades: values.capacidad_maxima_actividades || null,
         incluir_retorno: values.incluir_retorno,
-        tiempos_servicio: Object.entries(serviceTimes).map(([servicio, duracion_minutos]) => ({ servicio, duracion_minutos })),
+        tiempos_servicio: services.map((s) => ({ servicio: s, duracion_minutos: otTypeSettings(s, config.tipos_ot).minutos })),
       },
     });
   };
@@ -246,15 +274,44 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
         {modo === 'inhouse' ? (
           <div style={{ marginTop: 12 }}>
             {tecnicosActivos.length ? (
-              <Checkbox.Group value={selectedTecnicos} onChange={setSelectedTecnicos} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {tecnicosActivos.map((t) => (
-                  <Checkbox key={t.id} value={t.id}>
-                    {t.nombre} <Text type="secondary" style={{ fontSize: 12 }}>· {sedesById[t.base_id]?.empresa || t.base_id}</Text>
-                  </Checkbox>
-                ))}
-              </Checkbox.Group>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {tecnicosActivos.map((t) => {
+                  const selected = selectedTecnicos.includes(t.id);
+                  const partners = tecnicosActivos.filter((o) => o.id !== t.id && selectedTecnicos.includes(o.id)
+                    && o.base_id === t.base_id && (!parejas[o.id] || parejas[o.id] === t.id));
+                  return (
+                    <div key={t.id} className="tech-row">
+                      <Checkbox checked={selected} onChange={(e) => toggleTecnico(t.id, e.target.checked)}>
+                        <span className="tech-name">{t.nombre}</span>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {' '}· {sedesById[t.base_id]?.empresa || t.base_id}
+                          {t.costo_dia ? ` · ${formatCop(t.costo_dia)}/día` : ''}
+                        </Text>
+                      </Checkbox>
+                      {selected && partners.length > 0 && (
+                        <Select
+                          size="small"
+                          allowClear
+                          placeholder="Pareja: auto"
+                          value={parejas[t.id]}
+                          onChange={(v) => setPareja(t.id, v)}
+                          options={partners.map((o) => ({ value: o.id, label: o.nombre }))}
+                          style={{ width: 120 }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             ) : (
               <Alert type="info" showIcon message="Aún no hay técnicos registrados" />
+            )}
+            {selectedTecnicos.length > 1 && (
+              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>
+                {cuadrillasManuales.length
+                  ? `${cuadrillasManuales.length} pareja(s) armadas a mano; el resto sale solo.`
+                  : 'Sin parejas a mano: la app arma las parejas que piden las OTs de 2 personas.'}
+              </Text>
             )}
             <Button size="small" icon={<SettingOutlined />} style={{ marginTop: 8 }} onClick={() => setTechModalOpen(true)}>
               Gestionar técnicos
@@ -280,12 +337,34 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
         )}
       </Card>
 
+      {services.length > 0 && (
+        <Card
+          size="small"
+          title="Tipos de OT"
+          style={{ marginBottom: 12 }}
+          extra={<Button size="small" type="link" onClick={() => setTypesModalOpen(true)}>Editar</Button>}
+        >
+          {services.map((s) => {
+            const tipo = otTypeSettings(s, config.tipos_ot);
+            return (
+              <div key={s} className="ot-type-row">
+                <Text>{s} <Text type="secondary">({serviceCounts[s]})</Text></Text>
+                <span>
+                  <Tag>{tipo.minutos} min</Tag>
+                  <Tag color={tipo.personas > 1 ? 'blue' : undefined}>{tipo.personas} {tipo.personas > 1 ? 'personas' : 'persona'}</Tag>
+                </span>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
       <Collapse
         size="small"
         style={{ marginBottom: 12 }}
         items={[{
           key: 'jornada',
-          label: 'Jornada y tiempos de servicio',
+          label: 'Jornada',
           forceRender: true,
           children: (
             <Form
@@ -326,23 +405,6 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
                   <Switch />
                 </Form.Item>
               </Space>
-              {services.length > 0 && <Divider plain style={{ margin: '4px 0 8px' }}>Minutos por servicio</Divider>}
-              {services.map((s) => (
-                <Space key={s} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Tag color="blue">{s}</Tag>
-                  <Space size={4}>
-                    <InputNumber
-                      size="small"
-                      min={5}
-                      max={600}
-                      value={serviceTimes[s]}
-                      onChange={(v) => setServiceTimes((prev) => ({ ...prev, [s]: v || 60 }))}
-                      style={{ width: 70 }}
-                    />
-                    <Text style={{ fontSize: 12 }}>min</Text>
-                  </Space>
-                </Space>
-              ))}
             </Form>
           ),
         }]}
@@ -360,7 +422,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
         config={config}
         sedes={catalog.sedes}
         onClose={() => setTechModalOpen(false)}
-        onSaved={(saved) => { setConfig(saved); setTechModalOpen(false); }}
+        onSaved={(saved) => { onConfigChange(saved); setTechModalOpen(false); }}
       />
       <OrContractorsModal
         open={orModalOpen}
@@ -368,7 +430,14 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
         empresas={catalog.empresas}
         orsPresentes={Object.keys(orCounts)}
         onClose={() => setOrModalOpen(false)}
-        onSaved={(saved) => { setConfig(saved); setOrModalOpen(false); }}
+        onSaved={(saved) => { onConfigChange(saved); setOrModalOpen(false); }}
+      />
+      <OtTypesModal
+        open={typesModalOpen}
+        config={config}
+        otCounts={serviceCounts}
+        onClose={() => setTypesModalOpen(false)}
+        onSaved={(saved) => { onConfigChange(saved); setTypesModalOpen(false); }}
       />
     </>
   );

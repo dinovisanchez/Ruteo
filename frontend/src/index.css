@@ -113,3 +113,130 @@ code {
     display: none !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* iOS-style look: translucent glass bars, soft cards, app icon        */
+/* ------------------------------------------------------------------ */
+
+body {
+  background: #F2F2F7;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue',
+    'Segoe UI', Roboto, sans-serif;
+  color: #1C1C1E;
+}
+
+.ios-header {
+  position: sticky;
+  top: 0;
+  z-index: 1001;
+  height: 64px;
+  background: rgba(255, 255, 255, 0.72) !important;
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.18);
+}
+
+.ios-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 100%;
+}
+
+.app-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  display: block;
+}
+
+.app-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: #1C1C1E;
+}
+
+.app-subtitle {
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(60, 60, 67, 0.6);
+}
+
+/* No backdrop-filter here: it would turn the sider into the containing block of its
+   fixed collapse trigger and move the trigger into the middle of the panel */
+.ios-sider {
+  background: rgba(255, 255, 255, 0.7) !important;
+  border-right: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+
+.ios-sider .ant-layout-sider-trigger {
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+  border-top: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+
+.ant-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.05);
+}
+
+.ant-card-bordered {
+  border-color: transparent;
+}
+
+.ant-card .ant-card-head {
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.1);
+}
+
+.ios-sider .ant-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.ant-modal .ant-modal-content {
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: saturate(180%) blur(30px);
+  backdrop-filter: saturate(180%) blur(30px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+}
+
+.ant-modal .ant-modal-header {
+  background: transparent;
+}
+
+.tech-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(118, 118, 128, 0.06);
+}
+
+.tech-name {
+  font-weight: 600;
+}
+
+.ot-type-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.1);
+}
+
+.ot-type-row:last-child {
+  border-bottom: none;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(60, 60, 67, 0.25);
+  border-radius: 8px;
+}

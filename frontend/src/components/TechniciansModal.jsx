@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Table, Input, Select, Button, Popconfirm, message } from 'antd';
+import { Modal, Table, Input, InputNumber, Select, Button, Popconfirm, message } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { saveAssignmentConfig } from '../services/api';
 
 const newId = () => `tec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+const formatCop = (value) => (value ? `$ ${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, '.') : '');
+const parseCop = (value) => (value || '').replace(/[^\d]/g, '');
 
 const TechniciansModal = ({ open, config, sedes, onClose, onSaved }) => {
   const [rows, setRows] = useState([]);
@@ -21,7 +24,9 @@ const TechniciansModal = ({ open, config, sedes, onClose, onSaved }) => {
   };
 
   const addRow = () => {
-    setRows((prev) => [...prev, { id: newId(), nombre: '', base_id: bases[0]?.id, activo: true }]);
+    // New technicians default to Bia Bogotá, where most in-house technicians are
+    const defaultBase = bases.find((b) => b.id === 'bia-bogota') || bases[0];
+    setRows((prev) => [...prev, { id: newId(), nombre: '', base_id: defaultBase?.id, activo: true, costo_dia: null }]);
   };
 
   const handleSave = async () => {
@@ -66,6 +71,23 @@ const TechniciansModal = ({ open, config, sedes, onClose, onSaved }) => {
       ),
     },
     {
+      title: 'Costo por día (COP)',
+      dataIndex: 'costo_dia',
+      width: 170,
+      render: (value, row) => (
+        <InputNumber
+          value={value}
+          min={0}
+          step={10000}
+          style={{ width: '100%' }}
+          placeholder="Opcional"
+          formatter={formatCop}
+          parser={parseCop}
+          onChange={(v) => update(row.id, 'costo_dia', v)}
+        />
+      ),
+    },
+    {
       title: '',
       width: 50,
       render: (_, row) => (
@@ -85,7 +107,7 @@ const TechniciansModal = ({ open, config, sedes, onClose, onSaved }) => {
       okText="Guardar"
       cancelText="Cancelar"
       confirmLoading={saving}
-      width={640}
+      width={780}
     >
       <Table rowKey="id" columns={columns} dataSource={rows} pagination={false} size="small" />
       <Button icon={<PlusOutlined />} onClick={addRow} style={{ marginTop: 12 }} block type="dashed">

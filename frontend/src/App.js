@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { Layout, Typography, Space, Spin, message, Button, Tabs, Alert, Card, Empty } from 'antd';
 import {
-  AppstoreOutlined,
   DownloadOutlined,
   ClusterOutlined,
   RocketOutlined,
@@ -19,12 +18,13 @@ import ClusterMapView from './components/ClusterMapView';
 import ClusterSelectionPanel from './components/ClusterSelectionPanel';
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
+import OtsTable from './components/OtsTable';
 import { optimizeRoutes, analyzeProximity, optimizeByClusters, assignActivities } from './services/api';
 
 import './App.css';
 
 const { Header, Content, Sider, Footer } = Layout;
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 function App() {
   const [activities, setActivities] = useState(null);
@@ -42,6 +42,8 @@ function App() {
   const [assignmentResult, setAssignmentResult] = useState(null);
   const [assignmentRetorno, setAssignmentRetorno] = useState(true);
   const [assignedCodes, setAssignedCodes] = useState('');
+  const [assignmentMapeo, setAssignmentMapeo] = useState({});
+  const [assignmentConfig, setAssignmentConfig] = useState({ tecnicos: [], or_contratistas: {}, tipos_ot: {} });
 
   const handleUploadSuccess = (result) => {
     setActivities(result.activities);
@@ -151,10 +153,11 @@ function App() {
     }
   };
 
-  const handleOtsLoaded = useCallback((ots, nuevas, source) => {
+  const handleOtsLoaded = useCallback((ots, nuevas, source, mapeo) => {
     setAssignmentOts(ots);
     setAssignmentNuevas(nuevas);
     setAssignmentSource(source);
+    setAssignmentMapeo(mapeo || {});
   }, []);
 
   const handleAssign = async (request) => {
@@ -209,36 +212,28 @@ function App() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ background: '#001529', padding: '0 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '100%' }}>
-          <Space>
-            <AppstoreOutlined style={{ fontSize: 24, color: '#fff' }} />
-            <Title level={3} style={{ color: '#fff', margin: 0 }}>
-              Route Optimizer
-            </Title>
+      <Header className="ios-header">
+        <div className="ios-header-inner">
+          <Space size={12}>
+            <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" className="app-icon" />
+            <div>
+              <div className="app-title">Ruteo</div>
+              <div className="app-subtitle">Asignación de OTs y rutas</div>
+            </div>
           </Space>
-          <Space>
-            {resultForTab[activeTab] && (
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleExportResults}
-                style={{ marginRight: 8 }}
-              >
-                Exportar Resultados
-              </Button>
-            )}
-            <Text style={{ color: '#fff', fontSize: 12 }}>
-              Sistema de Optimización de Rutas v1.1
-            </Text>
-          </Space>
+          {resultForTab[activeTab] && (
+            <Button icon={<DownloadOutlined />} onClick={handleExportResults}>
+              Exportar
+            </Button>
+          )}
         </div>
       </Header>
 
       <Layout>
         <Sider
           width={400}
+          className="ios-sider"
           style={{
-            background: '#fff',
             overflow: 'auto',
             height: 'calc(100vh - 64px)',
             position: 'sticky',
@@ -306,6 +301,8 @@ function App() {
                       onOtsLoaded={handleOtsLoaded}
                       onAssign={handleAssign}
                       loading={loading}
+                      config={assignmentConfig}
+                      onConfigChange={setAssignmentConfig}
                     />
                   ),
                 },
@@ -332,13 +329,21 @@ function App() {
                       message="Las OTs cambiaron desde la última asignación. Vuelve a pulsar Asignar para actualizar las rutas."
                     />
                   )}
-                  {assignmentResult ? (
+                  {assignmentResult && (
                     <AssignmentResults result={assignmentResult} nuevas={assignmentNuevas} incluirRetorno={assignmentRetorno} />
-                  ) : (
+                  )}
+                  {!assignmentResult && !assignmentOts?.length && (
                     <Card style={{ height: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <Empty description="Trae OTs de Metabase, filtra por OR, elige técnicos o contratistas y pulsa Asignar" />
                     </Card>
                   )}
+                  <OtsTable
+                    ots={assignmentOts}
+                    nuevas={assignmentNuevas}
+                    mapeo={assignmentMapeo}
+                    config={assignmentConfig}
+                    title={`Todas las OTs (${assignmentOts?.length || 0}) con todas sus columnas`}
+                  />
                 </>
               ) : activeTab === 'standard' ? (
                 // Standard Optimization View
@@ -393,10 +398,10 @@ function App() {
           <Footer style={{ textAlign: 'center', background: 'transparent' }}>
             <Space direction="vertical" size={0}>
               <Text type="secondary">
-                Route Optimizer - Sistema de optimización de rutas y generación de lotes por proximidad
+                Ruteo · Asignación de OTs, rutas y lotes por proximidad
               </Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                Powered by Google OR-Tools + K-Means Clustering | React + FastAPI + Docker
+                Google OR-Tools · React · FastAPI
               </Text>
             </Space>
           </Footer>

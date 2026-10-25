@@ -1,9 +1,11 @@
 import React from 'react';
-import { Card, Row, Col, Statistic, Tag, Table, Collapse, Alert, Button, Space, Typography, Tooltip } from 'antd';
+import { Card, Row, Col, Statistic, Tag, Table, Collapse, Alert, Button, Space, Typography, Tooltip, Descriptions } from 'antd';
 import {
   CheckCircleOutlined, CloseCircleOutlined, DownloadOutlined, EnvironmentOutlined, WarningOutlined,
 } from '@ant-design/icons';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
+import { formatExtra } from './OtsTable';
+import { formatCop } from '../services/format';
 
 const { Text } = Typography;
 
@@ -26,23 +28,44 @@ const csvValue = (value) => {
   return /[";\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
+const extrasRows = (actividad) => Object.entries(actividad.extras || {})
+  .map(([key, value]) => ({ key, value: formatExtra(value) }));
+
+const ExtrasDetail = ({ actividad }) => {
+  const rows = extrasRows(actividad);
+  if (!rows.length) return <Text type="secondary">Sin columnas adicionales</Text>;
+  return (
+    <Descriptions size="small" column={3} bordered>
+      {rows.map(({ key, value }) => <Descriptions.Item key={key} label={key}>{value}</Descriptions.Item>)}
+    </Descriptions>
+  );
+};
+
 const exportCsv = (result) => {
+  const extraKeys = [];
+  const addKeys = (a) => Object.keys(a.extras || {}).forEach((k) => { if (!extraKeys.includes(k)) extraKeys.push(k); });
+  result.rutas.forEach((r) => r.ruta.paradas.forEach((p) => addKeys(p.actividad)));
+  result.sin_asignar.forEach(({ actividad }) => addKeys(actividad));
+  const extras = (a) => extraKeys.map((k) => formatExtra(a.extras?.[k]));
+
   // ";" and decimal comma so it opens directly in Excel configured in Spanish
-  const header = ['OT', 'OR', 'Ciudad', 'Dirección', 'Servicio', 'Responsable', 'Tipo', 'Sede', 'Secuencia',
-    'Llegada', 'Salida', 'Km desde anterior', 'Ubicación aproximada', 'Ruta viable', 'Motivo sin asignar'];
+  const header = ['OT', 'OR', 'Ciudad', 'Dirección', 'Tipo de OT', 'Personas requeridas', 'Responsable', 'Tipo',
+    'Integrantes', 'Personas cuadrilla', 'Costo cuadrilla (día)', 'Sede', 'Secuencia', 'Llegada', 'Salida',
+    'Km desde anterior', 'Ubicación aproximada', 'Ruta viable', 'Motivo sin asignar', ...extraKeys];
   const rows = [];
   result.rutas.forEach((r) => {
     r.ruta.paradas.forEach((p) => {
       const a = p.actividad;
-      rows.push([a.codigo_bia, a.or_operador, a.ciudad, a.direccion, a.servicio, r.responsable,
-        r.tipo === 'tecnico' ? 'Técnico in-house' : 'Contratista', `${r.sede.empresa} (${r.sede.ciudad})`, p.secuencia,
+      rows.push([a.codigo_bia, a.or_operador, a.ciudad, a.direccion, a.servicio, a.personas_requeridas, r.responsable,
+        r.tipo === 'tecnico' ? 'Técnico in-house' : 'Contratista', (r.integrantes || []).join(' + '), r.personas,
+        r.costo ?? '', `${r.sede.empresa} (${r.sede.ciudad})`, p.secuencia,
         p.hora_llegada_estimada, p.hora_salida_estimada, String(p.distancia_desde_anterior_km).replace('.', ','),
-        a.coordenadas_aproximadas ? 'Sí' : 'No', r.ruta.viable ? 'Sí' : 'No', '']);
+        a.coordenadas_aproximadas ? 'Sí' : 'No', r.ruta.viable ? 'Sí' : 'No', '', ...extras(a)]);
     });
   });
   result.sin_asignar.forEach(({ actividad: a, motivo }) => {
-    rows.push([a.codigo_bia, a.or_operador, a.ciudad, a.direccion, a.servicio, 'Sin asignar', '', '', '', '', '', '',
-      a.coordenadas_aproximadas ? 'Sí' : 'No', '', motivo]);
+    rows.push([a.codigo_bia, a.or_operador, a.ciudad, a.direccion, a.servicio, a.personas_requeridas, 'Sin asignar',
+      '', '', '', '', '', '', '', '', '', a.coordenadas_aproximadas ? 'Sí' : 'No', '', motivo, ...extras(a)]);
   });
   const csv = [header, ...rows].map((row) => row.map(csvValue).join(';')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
@@ -60,7 +83,8 @@ const stopColumns = (nuevas) => [
   { title: '#', dataIndex: 'secuencia', width: 40 },
   { title: 'OT', render: (_, p) => otCell(p.actividad, nuevas) },
   { title: 'OR', render: (_, p) => p.actividad.or_operador },
-  { title: 'Servicio', render: (_, p) => <Tag color="blue">{p.actividad.servicio}</Tag> },
+  { title: 'Tipo de OT', render: (_, p) => <Tag color="blue">{p.actividad.servicio}</Tag> },
+  { title: 'Personas', width: 80, render: (_, p) => p.actividad.personas_requeridas },
   { title: 'Dirección', render: (_, p) => `${p.actividad.direccion}${p.actividad.ciudad ? `, ${p.actividad.ciudad}` : ''}` },
   { title: 'Llegada', dataIndex: 'hora_llegada_estimada', width: 80, render: (v) => v.slice(0, 5) },
   { title: 'Salida', dataIndex: 'hora_salida_estimada', width: 80, render: (v) => v.slice(0, 5) },
@@ -71,10 +95,26 @@ const AssignmentResults = ({ result, nuevas, incluirRetorno }) => {
   if (!result) return null;
   const { metricas } = result;
   const esContratistas = result.modo === 'contratistas';
+  const actividadPorCodigo = {};
+  result.rutas.forEach((r) => r.ruta.paradas.forEach((p) => { actividadPorCodigo[p.actividad.codigo_bia] = p.actividad; }));
+
+  const stats = [
+    { title: 'OTs', value: result.total_actividades },
+    { title: 'Asignadas', value: metricas.ots_asignadas, color: '#34C759' },
+    { title: 'Sin asignar', value: metricas.ots_sin_asignar, color: metricas.ots_sin_asignar ? '#FF3B30' : undefined },
+    { title: esContratistas ? 'Cuadrillas' : 'Cuadrillas con ruta', value: metricas.rutas },
+    { title: 'Km totales', value: km(result.distancia_total_km) },
+    { title: 'Rutas no viables', value: metricas.rutas_no_viables, color: metricas.rutas_no_viables ? '#FF3B30' : undefined },
+  ];
+  if (metricas.costo_total !== null && metricas.costo_total !== undefined) {
+    stats.push({ title: 'Costo técnicos (día)', value: formatCop(metricas.costo_total) });
+  }
 
   const recommendationColumns = [
     { title: 'OT', render: (_, r) => <Text strong>{r.codigo_bia}</Text> },
     { title: 'OR', dataIndex: 'or_operador' },
+    { title: 'Tipo de OT', render: (_, r) => actividadPorCodigo[r.codigo_bia]?.servicio },
+    { title: 'Personas', render: (_, r) => actividadPorCodigo[r.codigo_bia]?.personas_requeridas },
     {
       title: 'Contratista recomendado',
       render: (_, r) => (
@@ -117,14 +157,18 @@ const AssignmentResults = ({ result, nuevas, incluirRetorno }) => {
           </Space>
         )}
       >
-        <Row gutter={16}>
-          <Col span={4}><Statistic title="OTs" value={result.total_actividades} /></Col>
-          <Col span={4}><Statistic title="Asignadas" value={metricas.ots_asignadas} valueStyle={{ color: '#3f8600' }} /></Col>
-          <Col span={4}><Statistic title="Sin asignar" value={metricas.ots_sin_asignar} valueStyle={{ color: metricas.ots_sin_asignar ? '#cf1322' : undefined }} /></Col>
-          <Col span={4}><Statistic title={esContratistas ? 'Cuadrillas' : 'Técnicos con ruta'} value={metricas.rutas} /></Col>
-          <Col span={4}><Statistic title="Km totales" value={km(result.distancia_total_km)} /></Col>
-          <Col span={4}><Statistic title="Rutas no viables" value={metricas.rutas_no_viables} valueStyle={{ color: metricas.rutas_no_viables ? '#cf1322' : undefined }} /></Col>
+        <Row gutter={[16, 16]}>
+          {stats.map((s) => (
+            <Col key={s.title} flex="1 1 120px">
+              <Statistic title={s.title} value={s.value} valueStyle={s.color ? { color: s.color } : undefined} />
+            </Col>
+          ))}
         </Row>
+        {!esContratistas && metricas.parejas > 0 && (
+          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+            {metricas.parejas} pareja(s) {metricas.cuadrillas_manuales ? 'armadas a mano' : 'sugeridas por las OTs de 2 personas'}.
+          </Text>
+        )}
         {esContratistas && metricas.ots_por_contratista && (
           <div style={{ marginTop: 12 }}>
             {Object.entries(metricas.ots_por_contratista).map(([empresa, n]) => <Tag key={empresa}>{empresa}: {n}</Tag>)}
@@ -170,13 +214,22 @@ const AssignmentResults = ({ result, nuevas, incluirRetorno }) => {
                 <Text strong>{r.responsable}</Text>
                 <Text type="secondary">desde {r.sede.empresa} ({r.sede.ciudad})</Text>
                 <Tag>{r.ruta.paradas.length} OTs</Tag>
+                <Tag color={r.personas > 1 ? 'blue' : undefined}>{r.personas} {r.personas > 1 ? 'personas' : 'persona'}</Tag>
+                {r.costo !== null && r.costo !== undefined && <Tag color="gold">{formatCop(r.costo)}/día</Tag>}
                 <Tag>{km(r.ruta.distancia_total_km)} km</Tag>
                 <Tag>{r.ruta.hora_inicio.slice(0, 5)}–{r.ruta.hora_fin.slice(0, 5)}</Tag>
                 {r.ruta.viable ? <Tag color="success">Viable</Tag> : <Tag color="error">Supera la jornada</Tag>}
               </Space>
             ),
             children: (
-              <Table rowKey="secuencia" size="small" pagination={false} columns={stopColumns(nuevas)} dataSource={r.ruta.paradas} />
+              <Table
+                rowKey="secuencia"
+                size="small"
+                pagination={false}
+                columns={stopColumns(nuevas)}
+                dataSource={r.ruta.paradas}
+                expandable={{ expandedRowRender: (p) => <ExtrasDetail actividad={p.actividad} /> }}
+              />
             ),
           }))}
         />
@@ -189,6 +242,7 @@ const AssignmentResults = ({ result, nuevas, incluirRetorno }) => {
             size="small"
             pagination={{ pageSize: 10, hideOnSinglePage: true }}
             dataSource={result.sin_asignar}
+            expandable={{ expandedRowRender: (r) => <ExtrasDetail actividad={r.actividad} /> }}
             columns={[
               { title: 'OT', render: (_, r) => otCell(r.actividad, nuevas) },
               { title: 'OR', render: (_, r) => r.actividad.or_operador },
