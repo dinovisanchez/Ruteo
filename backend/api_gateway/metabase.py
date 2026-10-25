@@ -18,8 +18,9 @@ logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
 # Nombres de columna que se reconocen automáticamente para cada campo de la OT
 ALIAS_COLUMNAS: Dict[str, List[str]] = {
-    "codigo_bia": ["codigo bia", "ot", "orden", "orden de trabajo", "orden trabajo", "numero ot", "no ot",
-                   "id ot", "codigo ot", "codigo", "frontera", "codigo frontera"],
+    # El código CO (Bia Code) va primero: es la llave que usa el resto del sistema
+    "codigo_bia": ["bia code", "co", "codigo bia", "ot", "orden", "orden de trabajo", "orden trabajo", "numero ot",
+                   "no ot", "id ot", "codigo ot", "codigo", "frontera", "codigo frontera"],
     "servicio": ["servicio", "tipo servicio", "tipo de servicio", "actividad", "tipo actividad",
                  "tipo de actividad", "maniobra", "tipo maniobra", "tipo"],
     "nombre": ["nombre", "cliente", "nombre cliente", "nombre del cliente", "razon social"],
