@@ -21,7 +21,8 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     # El código CO (Bia Code) va primero: es la llave que usa el resto del sistema
     "codigo_bia": ["bia code", "co", "codigo bia", "ot", "orden", "orden de trabajo", "orden trabajo", "numero ot",
                    "no ot", "id ot", "codigo ot", "codigo", "frontera", "codigo frontera"],
-    "servicio": ["servicio", "tipo servicio", "tipo de servicio", "actividad", "tipo actividad",
+    "servicio": ["tipo de ot", "tipo ot", "tipo de orden", "servicio", "tipo servicio", "tipo de servicio",
+                 "actividad", "tipo actividad",
                  "tipo de actividad", "maniobra", "tipo maniobra", "tipo"],
     "nombre": ["nombre", "cliente", "nombre cliente", "nombre del cliente", "razon social"],
     "direccion": ["direccion", "direccion ot", "direccion cliente", "address"],

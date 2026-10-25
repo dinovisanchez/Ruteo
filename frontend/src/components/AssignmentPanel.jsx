@@ -14,6 +14,7 @@ import OrContractorsModal from './OrContractorsModal';
 import {
   getMetabaseStatus, fetchMetabaseOTs, getCatalog, getAssignmentConfig,
 } from '../services/api';
+import { defaultServiceMinutes } from '../services/serviceTimes';
 
 const { Text } = Typography;
 
@@ -116,7 +117,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
   useEffect(() => {
     setServiceTimes((prev) => {
       const next = {};
-      services.forEach((s) => { next[s] = prev[s] || 60; });
+      services.forEach((s) => { next[s] = prev[s] || defaultServiceMinutes(s); });
       return next;
     });
   }, [services]);
@@ -326,7 +327,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
                   <Switch />
                 </Form.Item>
               </Space>
-              {services.length > 0 && <Divider plain style={{ margin: '4px 0 8px' }}>Minutos por servicio</Divider>}
+              {services.length > 0 && <Divider plain style={{ margin: '4px 0 8px' }}>Minutos por tipo de OT</Divider>}
               {services.map((s) => (
                 <Space key={s} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                   <Tag color="blue">{s}</Tag>
@@ -336,7 +337,7 @@ const AssignmentPanel = ({ uploadedActivities, ots, onOtsLoaded, onAssign, loadi
                       min={5}
                       max={600}
                       value={serviceTimes[s]}
-                      onChange={(v) => setServiceTimes((prev) => ({ ...prev, [s]: v || 60 }))}
+                      onChange={(v) => setServiceTimes((prev) => ({ ...prev, [s]: v || defaultServiceMinutes(s) }))}
                       style={{ width: 70 }}
                     />
                     <Text style={{ fontSize: 12 }}>min</Text>
