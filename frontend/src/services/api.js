@@ -149,4 +149,63 @@ export const optimizeByClusters = async (activityLot, maxDistanceKm = 20.0, meth
   return response.data;
 };
 
+/**
+ * Get Metabase connection status (without credentials)
+ * @returns {Promise<Object>} { configurado, servidor, autenticacion, card_id }
+ */
+export const getMetabaseStatus = async () => {
+  const response = await apiClient.get('/metabase/estado');
+  return response.data;
+};
+
+/**
+ * Fetch work orders (OTs) from a Metabase question
+ * @param {string} cardId - Question id; empty uses METABASE_CARD_ID
+ * @returns {Promise<Object>} OTs, column mapping, OR counts and warnings
+ */
+export const fetchMetabaseOTs = async (cardId) => {
+  const response = await apiClient.get('/metabase/ots', {
+    params: cardId ? { card_id: cardId } : {},
+  });
+  return response.data;
+};
+
+/**
+ * Get Bia bases and contractor sites
+ * @returns {Promise<Object>} { sedes, empresas, avisos }
+ */
+export const getCatalog = async () => {
+  const response = await apiClient.get('/catalogo');
+  return response.data;
+};
+
+/**
+ * Get in-house technicians and contractors per OR
+ * @returns {Promise<Object>} { tecnicos, or_contratistas }
+ */
+export const getAssignmentConfig = async () => {
+  const response = await apiClient.get('/asignacion/config');
+  return response.data;
+};
+
+/**
+ * Save in-house technicians and contractors per OR
+ * @param {Object} config - { tecnicos, or_contratistas }
+ * @returns {Promise<Object>} Saved configuration
+ */
+export const saveAssignmentConfig = async (config) => {
+  const response = await apiClient.put('/asignacion/config', config);
+  return response.data;
+};
+
+/**
+ * Assign OTs filtered by OR to in-house technicians or contractors
+ * @param {Object} request - { modo, actividades, or_filtro, tecnicos_ids, jornada }
+ * @returns {Promise<Object>} Assignment result with routes per technician/contractor
+ */
+export const assignActivities = async (request) => {
+  const response = await apiClient.post('/asignar', request);
+  return response.data;
+};
+
 export default apiClient;

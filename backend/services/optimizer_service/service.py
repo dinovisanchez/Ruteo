@@ -368,7 +368,8 @@ class OptimizationService:
         total_time = total_work_time + total_travel_time
         available_time = int(config.horas_laborales * 60)
         utilization = calculate_utilization(total_work_time, total_travel_time, available_time)
-        viable = time_to_minutes(current_time) <= time_to_minutes(config.horario_fin)
+        # Compare elapsed time, not clock time (the clock wraps around after 24 h)
+        viable = time_to_minutes(config.horario_inicio) + total_time <= time_to_minutes(config.horario_fin)
 
         return CrewRoute(
             cuadrilla_id=crew_id,

@@ -1,6 +1,6 @@
 """Pydantic models for Route Optimizer system"""
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime, time
 
 
@@ -29,6 +29,8 @@ class Activity(BaseModel):
     departamento: str
     or_operador: str
     coordinates: Optional[GPSCoordinates] = None
+    # True cuando las coordenadas salen de geocodificar la dirección y no de un GPS
+    coordenadas_aproximadas: bool = False
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""
@@ -394,3 +396,102 @@ class HealthResponse(BaseModel):
                 "version": "1.0.0"
             }
         }
+
+
+# ---------------------------------------------------------------------------
+# Asignación de OTs por OR (técnicos in-house y contratistas)
+# ---------------------------------------------------------------------------
+
+
+class SedeOperativa(BaseModel):
+    """Base de Bia o sede de un contratista, con su ubicación"""
+    id: str
+    empresa_id: str  # Agrupa las sedes de una misma empresa (para la regla OR → contratistas)
+    empresa: str
+    nit: Optional[str] = None
+    tipo: Literal["base", "contratista"]
+    ciudad: str
+    departamento: str = ""
+    direccion: str = ""
+    coordinates: GPSCoordinates
+
+
+class Tecnico(BaseModel):
+    """Técnico in-house que sale desde una base"""
+    id: str
+    nombre: str
+    base_id: str  # id de una SedeOperativa
+    activo: bool = True
+
+
+class AsignacionConfig(BaseModel):
+    """Configuración editable desde la app"""
+    tecnicos: List[Tecnico] = Field(default_factory=list)
+    # Nombre del OR (ej. "Afinia") → empresa_id de los contratistas que lo atienden
+    or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class JornadaConfig(BaseModel):
+    """Jornada de trabajo; el punto de partida sale de la base de cada responsable"""
+    horario_inicio: time = Field(default=time(8, 0))
+    horas_laborales: float = Field(default=8.0, gt=0, le=24)
+    velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
+    # Las distancias son en línea recta; este factor las aproxima a distancia por vía
+    factor_vial: float = Field(default=1.3, ge=1.0, le=3.0)
+    capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
+    incluir_retorno: bool = True
+    tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
+
+
+class AssignmentRequest(BaseModel):
+    """Pedido de asignación que el gateway envía al optimizador"""
+    modo: Literal["inhouse", "contratistas"]
+    actividades: List[Activity]
+    sedes: List[SedeOperativa]
+    tecnicos: List[Tecnico] = Field(default_factory=list)  # Solo los seleccionados
+    or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
+    jornada: JornadaConfig = Field(default_factory=JornadaConfig)
+
+
+class OpcionContratista(BaseModel):
+    sede_id: str
+    empresa: str
+    ciudad: str
+    distancia_km: float
+
+
+class RecomendacionContratista(BaseModel):
+    """Contratista sugerido para una OT"""
+    codigo_bia: str
+    or_operador: str
+    elegido: Optional[OpcionContratista] = None
+    # "lista_or": se eligió entre los contratistas definidos para ese OR
+    # "sin_lista_or": el OR no tiene contratistas definidos, se eligió entre todos
+    criterio: Literal["lista_or", "sin_lista_or"]
+    alternativas: List[OpcionContratista] = Field(default_factory=list)
+
+
+class RutaAsignada(BaseModel):
+    """Ruta de un técnico o de una cuadrilla de un contratista"""
+    responsable_id: str
+    responsable: str
+    tipo: Literal["tecnico", "contratista"]
+    sede: SedeOperativa
+    ruta: CrewRoute
+
+
+class ActividadSinAsignar(BaseModel):
+    actividad: Activity
+    motivo: str
+
+
+class AssignmentResult(BaseModel):
+    modo: Literal["inhouse", "contratistas"]
+    fecha: datetime = Field(default_factory=datetime.now)
+    total_actividades: int = Field(..., ge=0)
+    rutas: List[RutaAsignada]
+    recomendaciones: List[RecomendacionContratista] = Field(default_factory=list)
+    sin_asignar: List[ActividadSinAsignar] = Field(default_factory=list)
+    distancia_total_km: float = Field(..., ge=0)
+    viable_en_un_dia: bool
+    metricas: Dict[str, Any]

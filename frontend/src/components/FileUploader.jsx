@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Upload, Button, Card, Alert, Table, Tag } from 'antd';
-import { InboxOutlined, FileExcelOutlined, FilePdfOutlined } from '@ant-design/icons';
+import { InboxOutlined } from '@ant-design/icons';
 import { uploadFile } from '../services/api';
 
 const { Dragger } = Upload;

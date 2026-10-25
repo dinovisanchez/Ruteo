@@ -30,6 +30,7 @@ El sistema utiliza algoritmos avanzados de optimización (VRP/TSP) con Google OR
 - ✅ **Arquitectura de Microservicios**: Servicios independientes y escalables
 - ✅ **Interfaz Moderna**: React con Ant Design y mapas interactivos con Leaflet
 - ✅ **API RESTful**: Documentación completa con OpenAPI/Swagger
+- ✅ **Asignación por OR desde Metabase**: Trae OTs de una pregunta de Metabase y las reparte entre técnicos in-house o el contratista más cercano de cada OR
 
 ---
 
@@ -384,6 +385,33 @@ Este modo agrupa actividades por proximidad geográfica y optimiza cada lote ind
      - Lista de actividades por lote
      - Métricas de ruta optimizada
      - Exportación de resultados a JSON
+
+### Modo 3: Asignación por OR (Metabase)
+
+Pestaña **Asignación OR**. Trae las OTs de una pregunta de Metabase, las filtra por OR y decide quién las atiende:
+
+- **Técnicos in-house**: marcas los técnicos que salen ese día y cada uno sale desde su base de Bia. Las OTs se reparten entre ellos de forma equilibrada; las que no caben en la jornada quedan como *sin asignar*.
+- **Contratistas**: para cada OT se elige la sede más cercana entre los contratistas que atienden su OR (se definen en **Contratistas por OR**). Si el OR no tiene lista, se elige el más cercano de todos. Luego se arman las cuadrillas mínimas de cada sede para que todo quepa en la jornada; las OTs que ni solas caben en un día quedan en un *viaje de más de una jornada*.
+
+**1. Configurar Metabase** — copia `backend/.env.example` como `backend/.env` y completa:
+
+```env
+METABASE_URL=https://metabase.tu-empresa.com
+METABASE_API_KEY=...            # o METABASE_USERNAME / METABASE_PASSWORD
+METABASE_CARD_ID=123            # el número en la URL /question/123-...
+```
+
+La pregunta debe tener, como mínimo, una columna con el código de la OT y otra con el OR. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Municipio`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**. Los nombres de columna en español se reconocen solos (OT, Orden de trabajo, Operador de red, Tipo de servicio, Municipio, Dirección…); si no, defínelos con `METABASE_COLUMN_MAP`.
+
+**2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.
+
+**3. Técnicos y contratistas por OR** — se editan desde la app y se guardan en `backend/data/asignacion.json`.
+
+**4. Usar** — *Traer OTs* (o activa *Actualizar cada N min*: las OTs nuevas se marcan como **Nueva**), filtra por OR, elige *Técnicos in-house* o *Contratistas* y pulsa **Asignar**. El resultado se puede descargar en CSV.
+
+> Las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Jornada y tiempos de servicio*), no por la red vial real.
+
+Endpoints nuevos: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET|PUT /api/asignacion/config`, `POST /api/asignar`.
 
 ---
 

@@ -88,3 +88,13 @@ temp/
 # OS
 Thumbs.db
 .DS_Store
+
+# Virtualenv creado al correr el backend sin Docker
+.venv/
+
+# Catálogo de bases y contratistas (se versiona aunque *.csv esté ignorado)
+!backend/data/contratistas.csv
+# Datos que la app escribe en tiempo de ejecución
+backend/data/asignacion.json
+backend/data/geocache.json
+backend/data/*.tmp
