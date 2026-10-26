@@ -77,6 +77,8 @@ function App() {
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('todas');
   const [asignadoA, setAsignadoA] = useState(null);
+  // Who the plan sends it to: "tecnico", "contratista", "externo" or "sin_asignar" (the summary tiles)
+  const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
   const [panelState, setPanelState] = useState({ canExtract: false, fetching: false });
@@ -162,16 +164,17 @@ function App() {
     return porCodigo;
   }, [ots, result]);
 
-  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA);
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA || destino);
   const visibles = useMemo(() => {
     if (!result || !filtrosActivos) return null;
     const texto = normalizeText(busqueda.trim());
     return new Set(result.decisiones.filter((d) => (
       (estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+      && (!destino || d.enviar_a === destino)
       && matchesAssignee(d, asignadoA)
       && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto))
     )).map((d) => d.codigo_bia));
-  }, [result, filtrosActivos, busqueda, estado, asignadoA, actividades]);
+  }, [result, filtrosActivos, busqueda, estado, destino, asignadoA, actividades]);
 
   // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
   const otsFiltradas = useMemo(() => {
@@ -180,10 +183,11 @@ function App() {
     return (ots || []).filter((a) => (
       (a.situacion !== 'asignada' || a.fecha_visita === dia)
       && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
+      && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
       && (!asignadoA || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
-  }, [ots, result, dia, busqueda, estado, asignadoA]);
+  }, [ots, result, dia, busqueda, estado, destino, asignadoA]);
 
   const busy = loading || panelState.fetching;
   const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
@@ -337,7 +341,7 @@ function App() {
                 className="filter-assignee"
               />
               {filtrosActivos && (
-                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA(null); }} style={{ paddingInline: 4 }}>
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA(null); setDestino(null); }} style={{ paddingInline: 4 }}>
                   Limpiar
                 </Button>
               )}
@@ -370,6 +374,12 @@ function App() {
                   incluirRetorno={incluirRetorno}
                   view={vista}
                   visibles={visibles}
+                  estado={estado}
+                  destino={destino}
+                  onFiltrar={({ estado: nuevoEstado, destino: nuevoDestino }) => {
+                    if (nuevoEstado !== undefined) setEstado(nuevoEstado);
+                    if (nuevoDestino !== undefined) setDestino(nuevoDestino);
+                  }}
                   fijas={fijas}
                   onEdit={handleEdit}
                   tecnicos={tecnicosEdicion}

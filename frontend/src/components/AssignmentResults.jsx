@@ -174,8 +174,8 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 };
 
 const AssignmentResults = ({
-  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, fijas = {}, onEdit, tecnicos = [],
-  empresas = [], editing,
+  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, estado = 'todas', destino = null, onFiltrar,
+  fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
     () => Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion])),
@@ -203,18 +203,30 @@ const AssignmentResults = ({
   }));
   const rows = visibles ? allRows.filter((r) => visibles.has(r.decision.codigo_bia)) : allRows;
 
-  const resumen = [
-    `${result.total_actividades} OTs`,
-    `${metricas.ots_ya_asignadas ?? 0} asignadas`,
-    `${metricas.ots_pendientes ?? 0} por asignar`,
-  ];
-  const reparto = [
-    `${metricas.ots_con_tecnicos} a técnicos Bia`,
-    `${metricas.ots_con_contratistas} a contratistas`,
-    metricas.ots_externas ? `${metricas.ots_externas} externas` : null,
-    metricas.ots_sin_asignar ? `${metricas.ots_sin_asignar} sin asignar` : null,
-    `${km(result.distancia_total_km)} km`,
-    metricas.costo_total !== null && metricas.costo_total !== undefined ? formatCop(metricas.costo_total) : null,
+  // Summary tiles: touching one filters the plan by it; touching it again removes that filter
+  const porEstado = (valor) => () => onFiltrar({ estado: estado === valor ? 'todas' : valor });
+  const porDestino = (valor) => () => onFiltrar({ destino: destino === valor ? null : valor });
+  const tiles = [
+    {
+      title: 'OTs del día',
+      value: result.total_actividades,
+      active: estado === 'todas' && !destino,
+      onClick: () => onFiltrar({ estado: 'todas', destino: null }),
+    },
+    { title: 'Asignadas', value: metricas.ots_ya_asignadas ?? 0, color: '#248A3D', active: estado === 'asignadas', onClick: porEstado('asignadas') },
+    { title: 'Por asignar', value: metricas.ots_pendientes ?? 0, color: '#C93400', active: estado === 'pendientes', onClick: porEstado('pendientes') },
+    { title: 'Técnicos Bia', value: metricas.ots_con_tecnicos, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
+    { title: 'Contratistas', value: metricas.ots_con_contratistas, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
+    metricas.ots_externas
+      ? { title: 'Externas', value: metricas.ots_externas, active: destino === 'externo', onClick: porDestino('externo') }
+      : null,
+    metricas.ots_sin_asignar
+      ? { title: 'Sin asignar', value: metricas.ots_sin_asignar, color: '#FF3B30', active: destino === 'sin_asignar', onClick: porDestino('sin_asignar') }
+      : null,
+    { title: 'Km', value: km(result.distancia_total_km) },
+    metricas.costo_total !== null && metricas.costo_total !== undefined
+      ? { title: 'Costo técnicos', value: formatCop(metricas.costo_total) }
+      : null,
   ].filter(Boolean);
   const transito = (metricas.transito || []).filter((z) => z.recargo_pct || z.minutos_extra)
     .map((z) => `${z.nombre} +${z.recargo_pct} %${z.minutos_extra ? ` +${z.minutos_extra} min` : ''}`).join(', ');
@@ -279,19 +291,28 @@ const AssignmentResults = ({
 
   return (
     <>
-      <div className="summary">
-        <div>
-          <span className="summary-main">{resumen.join(' · ')}</span>
-          <span className="summary-sub">{reparto.join(' · ')}</span>
-          {visibles && <span className="summary-sub">Mostrando {rows.length} de {allRows.length}</span>}
-        </div>
-        <Tooltip title="Descargar el plan en CSV">
-          <Button type="text" icon={<DownloadOutlined />} onClick={() => exportCsv(allRows, metricas.dia)} />
-        </Tooltip>
+      <div className="kpi-row">
+        {tiles.map((t) => (
+          <button
+            key={t.title}
+            type="button"
+            className={`kpi${t.active ? ' active' : ''}${t.onClick ? '' : ' static'}`}
+            aria-pressed={t.onClick ? t.active : undefined}
+            disabled={!t.onClick || !onFiltrar}
+            onClick={t.onClick}
+          >
+            <span className="kpi-title">{t.title}</span>
+            <span className="kpi-value" style={t.color ? { color: t.color } : undefined}>{t.value}</span>
+          </button>
+        ))}
       </div>
       <div className="summary-note">
+        {visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
+        <Tooltip title="Descargar el plan en CSV">
+          <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />
+        </Tooltip>
       </div>
 
       {view === 'lista' && (
