@@ -1,414 +1,397 @@
-import React, { useCallback, useState } from 'react';
-import { Layout, Typography, Space, Spin, message, Button, Tabs, Alert, Card, Empty } from 'antd';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  DownloadOutlined,
-  ClusterOutlined,
-  RocketOutlined,
-  ApartmentOutlined,
+  Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tooltip, Input, Select,
+} from 'antd';
+import {
+  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons';
+import dayjs from 'dayjs';
 
-import FileUploader from './components/FileUploader';
-import ConfigPanel from './components/ConfigPanel';
-import ProximityPanel from './components/ProximityPanel';
-import MapView from './components/MapView';
-import MetricsPanel from './components/MetricsPanel';
-import RouteDetails from './components/RouteDetails';
-import ClusterResults from './components/ClusterResults';
-import ClusterMapView from './components/ClusterMapView';
-import ClusterSelectionPanel from './components/ClusterSelectionPanel';
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
 import OtsTable from './components/OtsTable';
-import { optimizeRoutes, analyzeProximity, optimizeByClusters, assignActivities } from './services/api';
+import { assignActivities, getCatalog, getZones } from './services/api';
+import { matrizPorVias } from './services/osrm';
+import { normalizeText } from './services/otTypes';
 
 import './App.css';
 
-const { Header, Content, Sider, Footer } = Layout;
-const { Text } = Typography;
+const { Header, Content, Sider } = Layout;
+
+const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
+const ISO_DAY = 'YYYY-MM-DD';
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Everything the name search looks at
+const searchText = (codigo, actividad, responsable) => normalizeText([
+  codigo, actividad?.nombre, actividad?.direccion, actividad?.ciudad, actividad?.servicio, actividad?.or_operador,
+  responsable, actividad?.asignado_a, actividad?.contratista_asignado,
+].filter(Boolean).join(' '));
+
+// "Asignado a" options come from who has OTs in the plan: technicians one by one, contractors by company
+const assigneeOptions = (result) => {
+  if (!result) return [];
+  const tecnicos = new Set();
+  const contratistas = new Set();
+  result.rutas.forEach((r) => {
+    if (r.tipo === 'tecnico') r.integrantes.forEach((n) => tecnicos.add(n));
+    else contratistas.add(r.sede.empresa);
+  });
+  const externos = new Set(result.decisiones.filter((d) => d.enviar_a === 'externo').map((d) => d.responsable));
+  const grupos = [
+    { label: 'Técnicos Bia', options: [...tecnicos].sort().map((n) => ({ value: `t:${n}`, label: n })) },
+    { label: 'Contratistas', options: [...contratistas].sort().map((n) => ({ value: `c:${n}`, label: n })) },
+    { label: 'Externos', options: [...externos].sort().map((n) => ({ value: `e:${n}`, label: n })) },
+  ];
+  if (result.decisiones.some((d) => d.enviar_a === 'sin_asignar')) {
+    grupos.push({ label: 'Otros', options: [{ value: 'sin', label: 'Sin asignar' }] });
+  }
+  return grupos.filter((g) => g.options.length);
+};
+
+const matchesAssignee = (decision, value) => {
+  if (!value) return true;
+  if (value === 'sin') return decision.enviar_a === 'sin_asignar';
+  const nombre = value.slice(2);
+  if (value.startsWith('t:')) return decision.enviar_a === 'tecnico' && (decision.responsable || '').split(' + ').includes(nombre);
+  if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
+  return decision.enviar_a === 'externo' && decision.responsable === nombre;
+};
 
 function App() {
-  const [activities, setActivities] = useState(null);
-  const [optimizationResult, setOptimizationResult] = useState(null);
-  const [clusterResult, setClusterResult] = useState(null);
-  const [clusterAnalysisType, setClusterAnalysisType] = useState('analyze'); // 'analyze' or 'optimize'
-  const [configuration, setConfiguration] = useState(null);
   const [loading, setLoading] = useState(false);
   const [siderCollapsed, setSiderCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState('standard');
-  const [selectedClusters, setSelectedClusters] = useState([]);
-  const [assignmentOts, setAssignmentOts] = useState(null);
-  const [assignmentNuevas, setAssignmentNuevas] = useState(new Set());
-  const [assignmentSource, setAssignmentSource] = useState('');
-  const [assignmentResult, setAssignmentResult] = useState(null);
-  const [assignmentRetorno, setAssignmentRetorno] = useState(true);
+  const [ots, setOts] = useState(null);
+  const [nuevas, setNuevas] = useState(new Set());
+  const [source, setSource] = useState('');
+  const [mapeo, setMapeo] = useState({});
+  const [result, setResult] = useState(null);
+  const [incluirRetorno, setIncluirRetorno] = useState(true);
   const [assignedCodes, setAssignedCodes] = useState('');
-  const [assignmentMapeo, setAssignmentMapeo] = useState({});
-  const [assignmentConfig, setAssignmentConfig] = useState({ tecnicos: [], or_contratistas: {}, tipos_ot: {} });
+  const [config, setConfig] = useState({ tecnicos: [], or_contratistas: {}, tipos_ot: {}, card_id: null });
+  const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
+  const [zonas, setZonas] = useState({ equipos: [], transito: [] });
+  const [dia, setDia] = useState(dayjs().format(ISO_DAY));
+  const [vista, setVista] = useState('lista');
+  // Filters: name search, status and who it is assigned to (the date is the plan day)
+  const [busqueda, setBusqueda] = useState('');
+  const [estado, setEstado] = useState('todas');
+  const [asignadoA, setAsignadoA] = useState(null);
+  // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
+  const [fijas, setFijas] = useState({});
+  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false });
+  const [actualizado, setActualizado] = useState(null);
+  const panelRef = useRef(null);
+  // Last request built by the panel, to recalculate when the day or an edit changes
+  const baseRef = useRef(null);
 
-  const handleUploadSuccess = (result) => {
-    setActivities(result.activities);
-    setOptimizationResult(null); // Clear previous results
-    setClusterResult(null); // Clear cluster results
-    setSelectedClusters([]); // Clear selected clusters
-    message.success(`${result.total_activities} actividades cargadas exitosamente`);
-  };
-
-  const handleOptimize = async (activityLot) => {
-    setLoading(true);
-    try {
-      message.loading({ content: 'Optimizando rutas...', key: 'optimize', duration: 0 });
-
-      const result = await optimizeRoutes(activityLot);
-
-      setOptimizationResult(result);
-      setConfiguration(activityLot.configuracion);
-
-      message.success({
-        content: `Optimización completada: ${result.cuadrillas_necesarias} cuadrillas, ${result.distancia_total_km.toFixed(2)} km total`,
-        key: 'optimize',
-        duration: 5,
-      });
-    } catch (error) {
-      console.error('Optimization error:', error);
-      message.error({
-        content: `Error en optimización: ${error.message}`,
-        key: 'optimize',
-        duration: 10,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleProximityAnalyze = async (maxDistanceKm, method) => {
-    if (!activities) {
-      message.error('Primero carga un archivo con actividades');
-      return;
-    }
-
-    setLoading(true);
-    setClusterAnalysisType('optimize');
-
-    try {
-      message.loading({ content: 'Generando lotes por proximidad y optimizando rutas...', key: 'proximity-opt', duration: 0 });
-
-      // Crear configuración mínima por defecto con tiempos para todos los servicios posibles
-      const defaultConfig = {
-        horario_inicio: '08:00:00',
-        horario_fin: '17:00:00',
-        horas_laborales: 8.0,
-        velocidad_promedio_kmh: 30.0,
-        punto_partida: activities[0].coordinates || { latitude: 4.6, longitude: -74.08 },
-        incluir_retorno: true,
-        tiempos_servicio: [
-          { servicio: 'normalizacion telemedida', duracion_minutos: 60 },
-          { servicio: 'instalacion', duracion_minutos: 180 },
-          { servicio: 'visita previa', duracion_minutos: 90 },
-          { servicio: 'normalizacion medida', duracion_minutos: 120 },
-          { servicio: 'legalizacion', duracion_minutos: 120 },
-          { servicio: 'pqr', duracion_minutos: 60 },
-          { servicio: 'verificacion consumo', duracion_minutos: 30 },
-          { servicio: 'desconexion', duracion_minutos: 30 },
-          { servicio: 'emergencia', duracion_minutos: 120 },
-          { servicio: 'visita conjunta', duracion_minutos: 60 },
-          { servicio: 'tlis', duracion_minutos: 30 },
-          { servicio: 'reconexion', duracion_minutos: 30 },
-          { servicio: 'visita pre-venta', duracion_minutos: 90 },
-          { servicio: 'inspeccion de frontera', duracion_minutos: 120 },
-          // Default para cualquier otro servicio
-          { servicio: 'default', duracion_minutos: 60 }
-        ]
-      };
-
-      const activityLot = {
-        nombre_lote: `Lote de ${activities.length} Actividades`,
-        actividades: activities,
-        configuracion: defaultConfig,
-      };
-
-      const result = await optimizeByClusters(activityLot, maxDistanceKm, method);
-
-      setClusterResult(result);
-
-      // Initialize selected clusters (select all by default)
-      if (result.rutas_por_cluster) {
-        const allClusterIds = result.rutas_por_cluster.map(r => r.cluster_id);
-        setSelectedClusters(allClusterIds);
-      }
-
-      message.success({
-        content: `${result.rutas_por_cluster.length} lotes generados, ${result.distancia_total_km.toFixed(2)} km total`,
-        key: 'proximity-opt',
-        duration: 5,
-      });
-    } catch (error) {
-      console.error('Cluster optimization error:', error);
-      message.error({
-        content: `Error generando lotes: ${error.message}`,
-        key: 'proximity-opt',
-        duration: 10,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOtsLoaded = useCallback((ots, nuevas, source, mapeo) => {
-    setAssignmentOts(ots);
-    setAssignmentNuevas(nuevas);
-    setAssignmentSource(source);
-    setAssignmentMapeo(mapeo || {});
+  useEffect(() => {
+    getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
+    getZones().then(setZonas).catch(() => {});
   }, []);
 
-  const handleAssign = async (request) => {
+  const handleOtsLoaded = useCallback((loaded, nuevasSet, sourceLabel, mapeoUsado) => {
+    setOts(loaded);
+    setNuevas(nuevasSet);
+    setSource(sourceLabel);
+    setMapeo(mapeoUsado || {});
+    setActualizado(dayjs());
+  }, []);
+
+  const handleAssign = useCallback(async (base, overrides = {}) => {
+    baseRef.current = base;
+    const request = { ...base, dia: overrides.dia ?? dia, fijas: overrides.fijas ?? fijas };
     setLoading(true);
     try {
-      message.loading({ content: 'Asignando OTs...', key: 'assign', duration: 0 });
-      const result = await assignActivities(request);
-      setAssignmentResult(result);
-      setAssignmentRetorno(request.jornada.incluir_retorno);
-      setAssignedCodes(request.actividades.map((a) => a.codigo_bia).sort().join('|'));
+      message.loading({ content: 'Calculando el plan del día...', key: 'assign', duration: 0 });
+      let assignment = await assignActivities(request);
+      // The backend could not reach the road server: the browser asks for the road times and the plan is redone
+      if (!assignment.metricas.tiempos_por_vias) {
+        message.loading({ content: 'Consultando tiempos por carretera desde el navegador...', key: 'assign', duration: 0 });
+        const puntos = [
+          ...catalog.sedes.map((s) => [s.coordinates.latitude, s.coordinates.longitude]),
+          ...request.actividades
+            .filter((a) => a.coordinates && (a.situacion !== 'asignada' || a.fecha_visita === request.dia))
+            .map((a) => [a.coordinates.latitude, a.coordinates.longitude]),
+        ];
+        const matriz = await matrizPorVias(puntos);
+        if (matriz) assignment = await assignActivities({ ...request, matriz });
+      }
+      setResult(assignment);
+      setIncluirRetorno(request.jornada.incluir_retorno);
+      setAssignedCodes(codesKey(request.actividades));
+      const m = assignment.metricas;
       message.success({
-        content: `${result.metricas.ots_asignadas} OTs asignadas en ${result.rutas.length} rutas`,
+        content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} a técnicos, ${m.ots_con_contratistas} a contratistas`,
         key: 'assign',
-        duration: 5,
+        duration: 3,
       });
     } catch (error) {
       console.error('Assignment error:', error);
-      message.error({ content: `Error asignando: ${error.message}`, key: 'assign', duration: 10 });
+      message.error({ content: `Error calculando el plan: ${error.message}`, key: 'assign', duration: 10 });
     } finally {
       setLoading(false);
     }
+  }, [dia, fijas, catalog]);
+
+  const changeDay = (nuevo) => {
+    setDia(nuevo);
+    if (baseRef.current) handleAssign(baseRef.current, { dia: nuevo });
   };
 
-  const assignmentStale = Boolean(assignmentResult && assignmentOts)
-    && assignmentOts.map((a) => a.codigo_bia).sort().join('|') !== assignedCodes;
-
-  const resultForTab = { standard: optimizationResult, proximity: clusterResult, asignacion: assignmentResult };
-  const exportNames = { standard: 'rutas-optimizadas', proximity: 'lotes-proximidad', asignacion: 'asignacion-or' };
-
-  const handleExportResults = () => {
-    const dataToExport = resultForTab[activeTab];
-
-    if (!dataToExport) {
-      message.warning('No hay resultados para exportar');
-      return;
-    }
-
-    // Create JSON export
-    const dataStr = JSON.stringify(dataToExport, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${exportNames[activeTab]}-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    message.success('Resultados exportados exitosamente');
+  const handleEdit = (codigo, value, situacion) => {
+    const next = { ...fijas };
+    // "Que decida la app" on a pending OT is the same as no edit
+    if (!value || (value === 'auto' && situacion !== 'asignada')) delete next[codigo];
+    else next[codigo] = value;
+    setFijas(next);
+    if (baseRef.current) handleAssign(baseRef.current, { fijas: next });
   };
+
+  const clearEdits = () => {
+    setFijas({});
+    if (baseRef.current) handleAssign(baseRef.current, { fijas: {} });
+  };
+
+  // Activity of each OT: from Metabase and, for the plan, as the optimizer returned it
+  const actividades = useMemo(() => {
+    const porCodigo = {};
+    (ots || []).forEach((a) => { porCodigo[a.codigo_bia] = a; });
+    (result?.rutas || []).forEach((r) => r.ruta.paradas.forEach((p) => { porCodigo[p.actividad.codigo_bia] = p.actividad; }));
+    (result?.sin_asignar || []).forEach(({ actividad }) => { porCodigo[actividad.codigo_bia] = actividad; });
+    return porCodigo;
+  }, [ots, result]);
+
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA);
+  const visibles = useMemo(() => {
+    if (!result || !filtrosActivos) return null;
+    const texto = normalizeText(busqueda.trim());
+    return new Set(result.decisiones.filter((d) => (
+      (estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+      && matchesAssignee(d, asignadoA)
+      && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto))
+    )).map((d) => d.codigo_bia));
+  }, [result, filtrosActivos, busqueda, estado, asignadoA, actividades]);
+
+  // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
+  const otsFiltradas = useMemo(() => {
+    const texto = normalizeText(busqueda.trim());
+    const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    return (ots || []).filter((a) => (
+      (a.situacion !== 'asignada' || a.fecha_visita === dia)
+      && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
+      && (!asignadoA || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
+      && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
+    ));
+  }, [ots, result, dia, busqueda, estado, asignadoA]);
+
+  const busy = loading || panelState.fetching;
+  const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
+  const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
+  const tecnicosEdicion = config.tecnicos
+    .filter((t) => t.activo !== false)
+    .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id) }));
+  const decisiones = result?.decisiones || [];
+  const cuenta = (situacion) => decisiones.filter((d) => d.situacion === situacion).length;
+  const ediciones = Object.keys(fijas).length;
+  const hoy = dayjs().format(ISO_DAY);
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout className="app-shell">
       <Header className="ios-header">
         <div className="ios-header-inner">
-          <Space size={12}>
+          <Space size={10}>
             <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" className="app-icon" />
-            <div>
-              <div className="app-title">Ruteo</div>
-              <div className="app-subtitle">Asignación de OTs y rutas</div>
-            </div>
+            <span className="app-title">Ruteo</span>
+            {ots && (
+              <span className="app-subtitle">
+                {ots.length} OTs{actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
+                {source.startsWith('Archivo') ? ` · ${source}` : ''}
+              </span>
+            )}
           </Space>
-          {resultForTab[activeTab] && (
-            <Button icon={<DownloadOutlined />} onClick={handleExportResults}>
-              Exportar
+          <Space size={6}>
+            {ots?.length > 0 && (
+              <Tooltip title="Recalcular con los ajustes actuales">
+                <Button type="text" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
+              </Tooltip>
+            )}
+            <Button
+              type="primary"
+              loading={busy}
+              disabled={!panelState.canExtract}
+              onClick={() => panelRef.current?.extract()}
+            >
+              Extraer y recomendar
             </Button>
-          )}
+          </Space>
         </div>
       </Header>
 
       <Layout>
         <Sider
-          width={400}
+          width={340}
           className="ios-sider"
           style={{
             overflow: 'auto',
-            height: 'calc(100vh - 64px)',
+            height: 'calc(100vh - 56px)',
             position: 'sticky',
-            top: 64,
+            top: 56,
             left: 0,
           }}
           collapsible
           collapsed={siderCollapsed}
           onCollapse={setSiderCollapsed}
+          collapsedWidth={0}
           breakpoint="lg"
         >
-          {/* Bottom padding so the sider collapse trigger does not cover the last button */}
-          <div style={{ padding: 16, paddingBottom: 72 }}>
-            <FileUploader onUploadSuccess={handleUploadSuccess} />
-
-            <Tabs
-              activeKey={activeTab}
-              onChange={setActiveTab}
-              style={{ marginTop: 16 }}
-              items={[
-                {
-                  key: 'standard',
-                  label: (
-                    <span>
-                      <RocketOutlined />
-                      Estándar
-                    </span>
-                  ),
-                  children: (
-                    <ConfigPanel
-                      activities={activities}
-                      onOptimize={handleOptimize}
-                      loading={loading}
-                    />
-                  ),
-                },
-                {
-                  key: 'proximity',
-                  label: (
-                    <span>
-                      <ClusterOutlined />
-                      Proximidad
-                    </span>
-                  ),
-                  children: (
-                    <ProximityPanel
-                      activities={activities}
-                      onAnalyze={handleProximityAnalyze}
-                      loading={loading}
-                    />
-                  ),
-                },
-                {
-                  key: 'asignacion',
-                  label: (
-                    <span>
-                      <ApartmentOutlined />
-                      Asignación OR
-                    </span>
-                  ),
-                  children: (
-                    <AssignmentPanel
-                      uploadedActivities={activities}
-                      ots={assignmentOts}
-                      onOtsLoaded={handleOtsLoaded}
-                      onAssign={handleAssign}
-                      loading={loading}
-                      config={assignmentConfig}
-                      onConfigChange={setAssignmentConfig}
-                    />
-                  ),
-                },
-              ]}
+          {/* Bottom padding so the sider collapse trigger does not cover the last section */}
+          <div style={{ padding: '8px 0 72px' }}>
+            <AssignmentPanel
+              ref={panelRef}
+              ots={ots}
+              onOtsLoaded={handleOtsLoaded}
+              onAssign={handleAssign}
+              loading={loading}
+              config={config}
+              onConfigChange={setConfig}
+              catalog={catalog}
+              dia={dia}
+              zonas={zonas}
+              onStateChange={setPanelState}
             />
           </div>
         </Sider>
 
-        <Layout style={{ padding: '0 24px 24px' }}>
-          <Content style={{ margin: '24px 0', minHeight: 280 }}>
-            <Spin spinning={loading} size="large" tip={{ standard: 'Optimizando rutas...', proximity: 'Generando lotes por proximidad...', asignacion: 'Asignando OTs (puede tardar hasta un minuto)...' }[activeTab]}>
-              {activeTab === 'asignacion' ? (
-                <>
-                  {assignmentSource && assignmentOts && (
-                    <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                      Fuente: {assignmentSource} · {assignmentOts.length} OTs
-                    </Text>
-                  )}
-                  {assignmentStale && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      style={{ marginBottom: 16 }}
-                      message="Las OTs cambiaron desde la última asignación. Vuelve a pulsar Asignar para actualizar las rutas."
-                    />
-                  )}
-                  {assignmentResult && (
-                    <AssignmentResults result={assignmentResult} nuevas={assignmentNuevas} incluirRetorno={assignmentRetorno} />
-                  )}
-                  {!assignmentResult && !assignmentOts?.length && (
-                    <Card style={{ height: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Empty description="Trae OTs de Metabase, filtra por OR, elige técnicos o contratistas y pulsa Asignar" />
-                    </Card>
-                  )}
-                  <OtsTable
-                    ots={assignmentOts}
-                    nuevas={assignmentNuevas}
-                    mapeo={assignmentMapeo}
-                    config={assignmentConfig}
-                    title={`Todas las OTs (${assignmentOts?.length || 0}) con todas sus columnas`}
-                  />
-                </>
-              ) : activeTab === 'standard' ? (
-                // Standard Optimization View
-                <>
-                  <div style={{ marginBottom: 16 }}>
-                    <MetricsPanel optimizationResult={optimizationResult} />
-                  </div>
+        <Layout className="main-pane">
+          <Content>
+            <div className="title-row">
+              <div>
+                <div className="eyebrow">{dia === hoy ? 'Hoy' : 'Plan del día'}</div>
+                <div className="large-title">{capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
+              </div>
+              <Segmented
+                value={vista}
+                onChange={setVista}
+                options={[
+                  { value: 'lista', label: 'Lista' },
+                  { value: 'mapa', label: 'Mapa' },
+                  { value: 'rutas', label: 'Rutas' },
+                  { value: 'tabla', label: 'Tabla completa' },
+                ]}
+              />
+            </div>
 
-                  <div style={{ marginBottom: 16, height: 500 }}>
-                    <MapView optimizationResult={optimizationResult} configuration={configuration} />
-                  </div>
-
-                  <div>
-                    <RouteDetails optimizationResult={optimizationResult} />
-                  </div>
-                </>
-              ) : (
-                // Proximity Lotes View
-                <>
-                  <div style={{ marginBottom: 16 }}>
-                    <ClusterResults 
-                      clusterResult={clusterResult} 
-                      type="optimize"
-                    />
-                  </div>
-                  
-                  {clusterResult && clusterResult.rutas_por_cluster && (
-                    <>
-                      {/* Cluster Selection Panel - Above Map */}
-                      <div style={{ marginBottom: 16 }}>
-                        <ClusterSelectionPanel
-                          clusterResult={clusterResult}
-                          selectedClusters={selectedClusters}
-                          onSelectionChange={setSelectedClusters}
-                        />
-                      </div>
-                      
-                      {/* Map View */}
-                      <div style={{ marginBottom: 16, height: 500 }}>
-                        <ClusterMapView 
-                          clusterResult={clusterResult}
-                          selectedClusters={selectedClusters}
-                        />
-                      </div>
-                    </>
-                  )}
-                </>
+            <div className="filter-bar">
+              <Input
+                allowClear
+                variant="filled"
+                prefix={<SearchOutlined />}
+                placeholder="Buscar por nombre, OT o dirección"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                className="filter-search"
+              />
+              <Space.Compact className="filter-date">
+                <Button
+                  icon={<LeftOutlined />}
+                  disabled={busy}
+                  onClick={() => changeDay(dayjs(dia).subtract(1, 'day').format(ISO_DAY))}
+                />
+                <DatePicker
+                  value={dayjs(dia)}
+                  allowClear={false}
+                  disabled={busy}
+                  format="DD/MM/YYYY"
+                  onChange={(d) => d && changeDay(d.format(ISO_DAY))}
+                  style={{ width: 128 }}
+                />
+                <Button
+                  icon={<RightOutlined />}
+                  disabled={busy}
+                  onClick={() => changeDay(dayjs(dia).add(1, 'day').format(ISO_DAY))}
+                />
+              </Space.Compact>
+              {dia !== hoy && (
+                <Button type="link" disabled={busy} onClick={() => changeDay(hoy)} style={{ paddingInline: 4 }}>Hoy</Button>
               )}
+              <Segmented
+                value={estado}
+                onChange={setEstado}
+                options={[
+                  { value: 'todas', label: `Todas${result ? ` ${decisiones.length}` : ''}` },
+                  { value: 'pendientes', label: `Por asignar${result ? ` ${cuenta('pendiente')}` : ''}` },
+                  { value: 'asignadas', label: `Asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
+                ]}
+              />
+              <Select
+                allowClear
+                showSearch
+                variant="filled"
+                placeholder="Asignado a"
+                value={asignadoA}
+                onChange={setAsignadoA}
+                options={assigneeOptions(result)}
+                optionFilterProp="label"
+                popupMatchSelectWidth={false}
+                className="filter-assignee"
+              />
+              {filtrosActivos && (
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA(null); }} style={{ paddingInline: 4 }}>
+                  Limpiar
+                </Button>
+              )}
+              {ediciones > 0 && (
+                <Button type="text" icon={<UndoOutlined />} disabled={busy} onClick={clearEdits}>
+                  Quitar {ediciones} {ediciones > 1 ? 'ediciones' : 'edición'}
+                </Button>
+              )}
+            </div>
+
+            <Spin spinning={loading} tip="Calculando el plan del día...">
+              {stale && (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="ios-alert"
+                  message="Las OTs cambiaron desde el último cálculo. Pulsa recalcular (↻) arriba a la derecha."
+                />
+              )}
+              {vista === 'tabla' && (
+                ots?.length ? (
+                  <OtsTable ots={otsFiltradas} nuevas={nuevas} mapeo={mapeo} config={config} title={`OTs del día (${otsFiltradas.length})`} />
+                ) : <EmptyState />
+              )}
+              {vista !== 'tabla' && (result ? (
+                <AssignmentResults
+                  result={result}
+                  ots={ots}
+                  nuevas={nuevas}
+                  incluirRetorno={incluirRetorno}
+                  view={vista}
+                  visibles={visibles}
+                  fijas={fijas}
+                  onEdit={handleEdit}
+                  tecnicos={tecnicosEdicion}
+                  empresas={catalog.empresas}
+                  editing={loading}
+                />
+              ) : <EmptyState />)}
             </Spin>
           </Content>
-
-          <Footer style={{ textAlign: 'center', background: 'transparent' }}>
-            <Space direction="vertical" size={0}>
-              <Text type="secondary">
-                Ruteo · Asignación de OTs, rutas y lotes por proximidad
-              </Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Google OR-Tools · React · FastAPI
-              </Text>
-            </Space>
-          </Footer>
         </Layout>
       </Layout>
     </Layout>
   );
 }
+
+const EmptyState = () => (
+  <div className="empty-state">
+    <div className="empty-title">Sin plan todavía</div>
+    <div className="empty-text">
+      Pulsa «Extraer y recomendar»: las OTs ya asignadas para este día se respetan y la app sugiere a quién enviar las pendientes.
+    </div>
+  </div>
+);
 
 export default App;

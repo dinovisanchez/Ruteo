@@ -4,10 +4,12 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
+from dateutil import parser as dateutil_parser
 
 from shared.catalogo import normalizar_texto, parse_coordenadas
 from shared.config import settings
@@ -32,8 +34,25 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     "gps": ["gps", "geolocalizacion", "coordenadas", "ubicacion", "lat lon", "latlon"],
     "latitud": ["latitud", "lat", "latitude"],
     "longitud": ["longitud", "lon", "lng", "long", "longitude"],
+    # Para distinguir dos OTs del mismo CO
+    "orden_trabajo": ["orden de trabajo", "orden trabajo", "numero ot", "id ot", "codigo ot", "ot"],
+    # Asignación ya hecha en Metabase
+    "situacion": ["situacion"],
+    "estado_app": ["estado app", "status app"],
+    "fecha_visita": ["fecha de la visita", "fecha visita", "fecha"],
+    "asignado_a": ["electricistas asignados", "electricistas", "tecnicos asignados", "tecnico asignado"],
+    "contratista_asignado": ["contratista asignado", "contratista"],
+    # La duración de una instalación depende del tipo de medida
+    "tipo_medida": ["tipo de medida", "tipo medida", "medida", "measurement type", "measurement type id"],
 }
 SERVICIO_POR_DEFECTO = "default"
+
+# Tipo de medida (como viene de Olibia o en español) → como se nombra en el tipo de OT
+_MEDIDAS = {
+    "direct": "directa", "directa": "directa",
+    "semi direct": "semidirecta", "semidirect": "semidirecta", "semidirecta": "semidirecta", "semi directa": "semidirecta",
+    "indirect": "indirecta", "indirecta": "indirecta",
+}
 
 
 class MetabaseError(Exception):
@@ -92,9 +111,11 @@ async def consultar_pregunta(card_id: str) -> List[Dict[str, Any]]:
     url = f"{settings.METABASE_URL.rstrip('/')}/api/card/{str(card_id).strip()}/query/json"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-            respuesta = await client.post(url, headers=await _encabezados(client))
+            # Sin formato: fechas en ISO y números sin separadores de miles
+            datos = {"format_rows": "false"}
+            respuesta = await client.post(url, headers=await _encabezados(client), data=datos)
             if respuesta.status_code == 401 and not settings.METABASE_API_KEY:
-                respuesta = await client.post(url, headers=await _encabezados(client, renovar=True))
+                respuesta = await client.post(url, headers=await _encabezados(client, renovar=True), data=datos)
     except httpx.RequestError as e:
         raise MetabaseError(f"No se pudo conectar con Metabase en {settings.METABASE_URL}: {e}")
 
@@ -181,6 +202,43 @@ def _coordenadas_fila(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Optional[G
     return None
 
 
+def _situacion(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
+    """'pendiente' o 'asignada', según la columna Situación o el estado de la app de campo"""
+    if "situacion" in mapeo:
+        valor = normalizar_texto(_texto(fila.get(mapeo["situacion"])))
+        if "pendiente" in valor:
+            return "pendiente"
+        if "asignad" in valor:
+            return "asignada"
+    if "estado_app" in mapeo:
+        valor = normalizar_texto(_texto(fila.get(mapeo["estado_app"])))
+        return "pendiente" if valor in ("", "pending_assignment", "pending assignment") else "asignada"
+    return "pendiente"
+
+
+def _fecha(valor: Any) -> Optional[str]:
+    """Fecha YYYY-MM-DD a partir de lo que mande Metabase (ISO o texto con formato)"""
+    texto = _texto(valor)
+    if not texto:
+        return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}", texto):
+        return texto[:10]
+    try:
+        return dateutil_parser.parse(texto, fuzzy=True).date().isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def _servicio(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
+    """Tipo de OT; las instalaciones llevan el tipo de medida ("Instalación semidirecta")"""
+    servicio = _texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO
+    if "tipo_medida" in mapeo and normalizar_texto(servicio) == "instalacion":
+        medida = _MEDIDAS.get(re.sub(r"[^a-z]+", " ", normalizar_texto(_texto(fila.get(mapeo["tipo_medida"])))).strip())
+        if medida:
+            return f"{servicio} {medida}"
+    return servicio
+
+
 def filas_a_actividades(
     filas: List[Dict[str, Any]],
     mapeo_manual: Optional[Dict[str, str]] = None,
@@ -191,12 +249,11 @@ def filas_a_actividades(
     """
     columnas = list(filas[0].keys()) if filas else []
     mapeo = resolver_mapeo(columnas, mapeo_manual if mapeo_manual is not None else _mapeo_configurado())
-    faltantes = [c for c in ("codigo_bia", "or_operador") if c not in mapeo]
-    if filas and faltantes:
+    if filas and "or_operador" not in mapeo:
         raise MetabaseError(
-            f"No encontré las columnas para {', '.join(faltantes)} en la pregunta. "
+            "No encontré la columna del OR en la pregunta. "
             f"Columnas disponibles: {', '.join(columnas)}. "
-            "Renómbralas en Metabase o defínelas en METABASE_COLUMN_MAP."
+            "Renómbrala como 'OR' en Metabase o defínela en METABASE_COLUMN_MAP."
         )
     tiene_ubicacion = "gps" in mapeo or ("latitud" in mapeo and "longitud" in mapeo) or "direccion" in mapeo
     if filas and not tiene_ubicacion:
@@ -206,23 +263,31 @@ def filas_a_actividades(
         )
 
     avisos: List[str] = []
+    if filas and "codigo_bia" not in mapeo:
+        avisos.append(
+            "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
+        )
     actividades: List[Activity] = []
     vistos = set()
     duplicadas = 0
     for numero, fila in enumerate(filas, start=1):
-        codigo = _texto(fila.get(mapeo["codigo_bia"]))
+        codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
         if not codigo:
             avisos.append(f"Fila {numero}: sin código de OT; se omite")
             continue
+        orden = _texto(fila.get(mapeo["orden_trabajo"])) if "orden_trabajo" in mapeo else ""
         if codigo in vistos:
-            duplicadas += 1
-            continue
+            # Otra OT del mismo CO: se distingue con el número de la orden
+            if not orden or f"{codigo} / OT {orden}" in vistos:
+                duplicadas += 1
+                continue
+            codigo = f"{codigo} / OT {orden}"
         vistos.add(codigo)
 
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
-            servicio=_texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO,
+            servicio=_servicio(fila, mapeo),
             gps=f"{coords.latitude},{coords.longitude}" if coords else "",
             nombre=_texto(fila.get(mapeo.get("nombre", ""))),
             direccion=_texto(fila.get(mapeo.get("direccion", ""))),
@@ -231,6 +296,12 @@ def filas_a_actividades(
             or_operador=_texto(fila.get(mapeo["or_operador"])) or "Sin OR",
             coordinates=coords,
             extras=dict(fila),
+            situacion=_situacion(fila, mapeo),
+            fecha_visita=_fecha(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
+            asignado_a=(_texto(fila.get(mapeo["asignado_a"])) or None) if "asignado_a" in mapeo else None,
+            contratista_asignado=(
+                (_texto(fila.get(mapeo["contratista_asignado"])) or None) if "contratista_asignado" in mapeo else None
+            ),
         ))
     if duplicadas:
         avisos.append(f"{duplicadas} filas repetidas (mismo código de OT) se tomaron una sola vez")

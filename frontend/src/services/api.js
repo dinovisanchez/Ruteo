@@ -68,88 +68,6 @@ export const uploadFile = async (file) => {
 };
 
 /**
- * Optimize routes for activity lot
- * @param {Object} activityLot - Activity lot with configuration
- * @returns {Promise<Object>} Optimization result
- */
-export const optimizeRoutes = async (activityLot) => {
-  const response = await apiClient.post('/optimize', activityLot);
-  return response.data;
-};
-
-/**
- * Estimate number of crews needed
- * @param {Object} activityLot - Activity lot with configuration
- * @returns {Promise<Object>} Crew estimation
- */
-export const estimateCrews = async (activityLot) => {
-  const response = await apiClient.post('/estimate-crews', activityLot);
-  return response.data;
-};
-
-/**
- * Get geographic summary of activities
- * @param {Object} activityLot - Activity lot
- * @returns {Promise<Object>} Geographic summary
- */
-export const getGeographicSummary = async (activityLot) => {
-  const response = await apiClient.post('/geographic-summary', activityLot);
-  return response.data;
-};
-
-/**
- * Check health of all services
- * @returns {Promise<Object>} Health status
- */
-export const checkServicesHealth = async () => {
-  const response = await apiClient.get('/health/services');
-  return response.data;
-};
-
-/**
- * Get API information
- * @returns {Promise<Object>} API info
- */
-export const getApiInfo = async () => {
-  const response = await apiClient.get('/info');
-  return response.data;
-};
-
-/**
- * Analyze proximity clusters
- * @param {Object} activityLot - Activity lot to analyze
- * @param {number} maxDistanceKm - Maximum distance for clustering (default: 20)
- * @param {string} method - Clustering method: "proximity" or "kmeans" (default: "proximity")
- * @returns {Promise<Object>} Proximity clustering result
- */
-export const analyzeProximity = async (activityLot, maxDistanceKm = 20.0, method = 'proximity') => {
-  const response = await apiClient.post('/analyze-proximity', activityLot, {
-    params: {
-      max_distance_km: maxDistanceKm,
-      method: method
-    }
-  });
-  return response.data;
-};
-
-/**
- * Optimize routes by proximity clusters
- * @param {Object} activityLot - Activity lot to optimize
- * @param {number} maxDistanceKm - Maximum distance for clustering (default: 20)
- * @param {string} method - Clustering method: "proximity" or "kmeans" (default: "proximity")
- * @returns {Promise<Object>} Cluster optimization result
- */
-export const optimizeByClusters = async (activityLot, maxDistanceKm = 20.0, method = 'proximity') => {
-  const response = await apiClient.post('/optimize-by-clusters', activityLot, {
-    params: {
-      max_distance_km: maxDistanceKm,
-      method: method
-    }
-  });
-  return response.data;
-};
-
-/**
  * Get Metabase connection status (without credentials)
  * @returns {Promise<Object>} { configurado, servidor, autenticacion, card_id }
  */
@@ -199,12 +117,53 @@ export const saveAssignmentConfig = async (config) => {
 };
 
 /**
- * Assign OTs filtered by OR to in-house technicians or contractors
- * @param {Object} request - { modo, actividades, or_filtro, tecnicos_ids, jornada }
+ * Day plan: OTs already assigned for that day plus the pending ones, to technicians or contractors
+ * @param {Object} request - { modo, actividades, or_filtro, tecnicos_ids, cuadrillas, personas_por_tipo,
+ *   dia, fijas, jornada }; fijas maps an OT to "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
  * @returns {Promise<Object>} Assignment result with routes per technician/contractor
  */
 export const assignActivities = async (request) => {
   const response = await apiClient.post('/asignar', request);
+  return response.data;
+};
+
+/**
+ * Network operators (OR) with the departments they serve and the contractors based there
+ * @param {string[]} nombres - OR names as they appear in the OTs, to match them to the catalog
+ * @returns {Promise<Object>} { operadores: [{ nombre, departamentos, notas, empresas_auto }], resueltos }
+ */
+export const getOperators = async (nombres = []) => {
+  const params = new URLSearchParams();
+  nombres.forEach((n) => params.append('nombres', n));
+  const response = await apiClient.get('/operadores', { params });
+  return response.data;
+};
+
+/**
+ * Technicians listed in the "Tecnicos" tab of the contractors sheet
+ * @returns {Promise<Object[]>} [{ id, nombre, base_id }]
+ */
+export const getSheetTechnicians = async () => {
+  const response = await apiClient.get('/tecnicos/hoja');
+  return response.data;
+};
+
+/**
+ * Bia teams (which OR and zones each one covers) and traffic zones with their surcharge
+ * @returns {Promise<Object>} { equipos: [{ base_id, equipo, ors, zonas }], transito: [{ nombre, recargo_pct, minutos_extra }] }
+ */
+export const getZones = async () => {
+  const response = await apiClient.get('/zonas');
+  return response.data;
+};
+
+/**
+ * Road geometry of routes (OSRM), to draw them along the streets
+ * @param {Object[]} rutas - [{ id, puntos: [[lat, lon], ...] }] in visiting order
+ * @returns {Promise<Object>} { rutas: { [id]: { geometria: [[lat, lon], ...], km } }, aviso? }
+ */
+export const getRouteGeometry = async (rutas) => {
+  const response = await apiClient.post('/rutas/trazado', { rutas });
   return response.data;
 };
 

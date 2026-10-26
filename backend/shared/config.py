@@ -35,6 +35,8 @@ class Settings(BaseSettings):
         "http://localhost:8000",
         "http://frontend:3000"
     ]
+    # The dev server moves to 3001, 3002... when 3000 is busy; accept any local port
+    CORS_ORIGIN_REGEX: str = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
 
     # Optimization defaults
     DEFAULT_WORK_HOURS: float = 8.0
@@ -74,6 +76,13 @@ class Settings(BaseSettings):
     # Geocodificación (Nominatim) para OTs que llegan sin GPS
     GEOCODING_ENABLED: bool = True
     GEOCODING_MAX_POR_CONSULTA: int = 30
+
+    # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
+    OSRM_URL: str = "https://router.project-osrm.org"
+    # Si el principal no responde se usa este (el OSRM de FOSSGIS que usa openstreetmap.org)
+    OSRM_URL_RESPALDO: str = "https://routing.openstreetmap.de/routed-car"
+    # El servidor público de OSRM pide máximo una consulta por segundo
+    OSRM_PAUSA_SEGUNDOS: float = 1.0
 
     class Config:
         env_file = ".env"

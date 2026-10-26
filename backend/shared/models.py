@@ -35,6 +35,11 @@ class Activity(BaseModel):
     personas_requeridas: int = Field(default=1, ge=1)
     # Todas las columnas de la fila de origen (Metabase), tal como llegaron
     extras: Dict[str, Any] = Field(default_factory=dict)
+    # "asignada" cuando en Metabase ya tiene fecha y responsables
+    situacion: Literal["pendiente", "asignada"] = "pendiente"
+    fecha_visita: Optional[str] = None  # YYYY-MM-DD
+    asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
+    contratista_asignado: Optional[str] = None
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""
@@ -87,6 +92,8 @@ class WorkConfiguration(BaseModel):
     horario_fin: time = Field(default=time(17, 0))
     horas_laborales: float = Field(default=8.0, gt=0, le=24)
     velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
+    # Sin OSRM: los km de un desplazamiento que pasan de los primeros 15 se recorren a esta velocidad
+    velocidad_carretera_kmh: float = Field(default=60.0, gt=0)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     punto_partida: GPSCoordinates
     incluir_retorno: bool = True
@@ -420,6 +427,14 @@ class SedeOperativa(BaseModel):
     coordinates: GPSCoordinates
 
 
+class OperadorRed(BaseModel):
+    """Operador de Red (OR) y los departamentos donde distribuye energía"""
+    nombre: str
+    alias: List[str] = Field(default_factory=list)  # Otras formas en que aparece el nombre
+    departamentos: List[str] = Field(default_factory=list)
+    notas: str = ""
+
+
 class Tecnico(BaseModel):
     """Técnico in-house que sale desde una base"""
     id: str
@@ -442,6 +457,43 @@ class AsignacionConfig(BaseModel):
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
     # Nombre del tipo de OT (ej. "Instalación") → minutos y personas
     tipos_ot: Dict[str, TipoOT] = Field(default_factory=dict)
+    # Pregunta de Metabase que se extrae por defecto (el número en /question/123-...)
+    card_id: Optional[str] = None
+
+
+class Zona(BaseModel):
+    """Zona circular alrededor de un punto; con `municipios`, también entran las OTs de esos municipios"""
+    nombre: str
+    latitud: float
+    longitud: float
+    radio_km: float = Field(gt=0)
+    municipios: List[str] = Field(default_factory=list)
+    departamento: Optional[str] = None  # Para no confundir municipios con el mismo nombre
+
+
+class ZonaTransito(BaseModel):
+    """Zona con tránsito pesado: los desplazamientos que empiezan o terminan en ella tardan más"""
+    nombre: str
+    latitud: float
+    longitud: float
+    radio_km: float = Field(gt=0)
+    recargo_pct: float = Field(default=0, ge=0, le=500)  # % más sobre el tiempo de desplazamiento
+    minutos_extra: float = Field(default=0, ge=0, le=240)  # Minutos más por cada desplazamiento
+
+
+class CoberturaEquipo(BaseModel):
+    """OTs que atiende un equipo de técnicos Bia: las de esos OR dentro de esas zonas"""
+    base_id: str
+    equipo: str
+    ors: List[str]
+    zonas: List[Zona] = Field(default_factory=list)  # Vacía = toda el área que atiende el OR
+
+
+class MatrizVial(BaseModel):
+    """Distancia (km) y tiempo (min) por las vías entre cada par de puntos; None si no hay ruta"""
+    puntos: List[List[float]]  # [[lat, lon], ...]
+    km: List[List[Optional[float]]]
+    minutos: List[List[Optional[float]]]
 
 
 class JornadaConfig(BaseModel):
@@ -449,27 +501,48 @@ class JornadaConfig(BaseModel):
     horario_inicio: time = Field(default=time(8, 0))
     horas_laborales: float = Field(default=8.0, gt=0, le=24)
     velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
+    # Sin OSRM: los km de un desplazamiento que pasan de los primeros 15 se recorren a esta velocidad
+    velocidad_carretera_kmh: float = Field(default=60.0, gt=0)
     # Las distancias son en línea recta; este factor las aproxima a distancia por vía
     factor_vial: float = Field(default=1.3, ge=1.0, le=3.0)
+    # Sin coberturas por equipo: en modo automático, las OTs más lejos que esto de toda base Bia van a contratistas
+    radio_inhouse_km: float = Field(default=40.0, gt=0)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     incluir_retorno: bool = True
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
+    zonas_transito: List[ZonaTransito] = Field(default_factory=list)
+
+
+ModoAsignacion = Literal["automatico", "inhouse", "contratistas"]
 
 
 class AssignmentRequest(BaseModel):
     """Pedido de asignación que el gateway envía al optimizador"""
-    modo: Literal["inhouse", "contratistas"]
+    modo: ModoAsignacion
     actividades: List[Activity]
     sedes: List[SedeOperativa]
     tecnicos: List[Tecnico] = Field(default_factory=list)  # Solo los seleccionados
     # Cuadrillas armadas a mano (ids de técnicos); vacío = la app las sugiere
     cuadrillas: List[List[str]] = Field(default_factory=list)
     or_contratistas: Dict[str, List[str]] = Field(default_factory=dict)
+    # Catálogo de OR: sin lista manual, el contratista sale de los departamentos que atiende el OR
+    operadores: List[OperadorRed] = Field(default_factory=list)
+    # OT → a quién queda fijada: "tecnico:<id>", "empresa:<empresa_id>" o "contratista" (cualquiera)
+    fijas: Dict[str, str] = Field(default_factory=dict)
+    # OT → responsable externo (ya asignada a alguien que no está en la app): no se enruta
+    externas: Dict[str, str] = Field(default_factory=dict)
+    # OT → texto que antecede al motivo de la decisión (ej. por qué se reasignó)
+    notas: Dict[str, str] = Field(default_factory=dict)
+    # Qué OTs atiende cada equipo Bia en modo automático; vacío = las que estén en el radio de una base
+    coberturas: List[CoberturaEquipo] = Field(default_factory=list)
+    # Tiempos por las vías (OSRM); sin matriz, línea recta × factor vial a la velocidad promedio
+    matriz: Optional[MatrizVial] = None
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
 class OpcionContratista(BaseModel):
     sede_id: str
+    empresa_id: Optional[str] = None
     empresa: str
     ciudad: str
     distancia_km: float
@@ -480,9 +553,14 @@ class RecomendacionContratista(BaseModel):
     codigo_bia: str
     or_operador: str
     elegido: Optional[OpcionContratista] = None
-    # "lista_or": se eligió entre los contratistas definidos para ese OR
-    # "sin_lista_or": el OR no tiene contratistas definidos, se eligió entre todos
-    criterio: Literal["lista_or", "sin_lista_or"]
+    # "lista_or": entre los contratistas definidos a mano para ese OR
+    # "departamento_or": entre los que tienen sede en los departamentos que atiende el OR
+    # "departamento_ot": el OR no está en el catálogo; entre los que tienen sede en el departamento de la OT
+    # "sin_lista_or": ningún contratista tiene sede en la zona; el más cercano de todos
+    # "fijada": la OT quedó fijada a ese contratista (en Metabase o a mano)
+    criterio: Literal["lista_or", "departamento_or", "departamento_ot", "sin_lista_or", "fijada"]
+    or_canonico: Optional[str] = None  # Nombre del OR en el catálogo, si se reconoció
+    zona: Optional[str] = None  # Departamentos considerados, para explicar la elección
     alternativas: List[OpcionContratista] = Field(default_factory=list)
 
 
@@ -503,11 +581,26 @@ class ActividadSinAsignar(BaseModel):
     motivo: str
 
 
+class DecisionOT(BaseModel):
+    """A quién se recomienda enviar una OT y por qué"""
+    codigo_bia: str
+    enviar_a: Literal["tecnico", "contratista", "externo", "sin_asignar"]
+    situacion: Literal["pendiente", "asignada"] = "pendiente"
+    fijada: bool = False  # Quedó fija por una asignación previa o una edición manual
+    responsable_id: Optional[str] = None
+    responsable: Optional[str] = None
+    sede: Optional[str] = None  # "Empresa (Ciudad)" de donde sale la cuadrilla
+    distancia_base_km: Optional[float] = None
+    hora_llegada: Optional[time] = None
+    motivo: str
+
+
 class AssignmentResult(BaseModel):
-    modo: Literal["inhouse", "contratistas"]
+    modo: ModoAsignacion
     fecha: datetime = Field(default_factory=datetime.now)
     total_actividades: int = Field(..., ge=0)
     rutas: List[RutaAsignada]
+    decisiones: List[DecisionOT] = Field(default_factory=list)
     recomendaciones: List[RecomendacionContratista] = Field(default_factory=list)
     sin_asignar: List[ActividadSinAsignar] = Field(default_factory=list)
     distancia_total_km: float = Field(..., ge=0)
