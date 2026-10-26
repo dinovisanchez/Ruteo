@@ -330,8 +330,11 @@ body {
   border-bottom: 1px solid var(--hairline);
 }
 
+/* It gives up some width so the rest of the bar fits on one line */
 .filter-search {
-  width: 260px;
+  flex: 1 1 160px;
+  min-width: 160px;
+  max-width: 260px;
 }
 
 .filter-assignee {
@@ -532,6 +535,11 @@ body {
 .muted-icon {
   color: var(--label-3);
   font-size: 12px;
+}
+
+.muted-text {
+  font-size: 13px;
+  color: var(--label-3);
 }
 
 .edit-button {
@@ -875,7 +883,8 @@ body {
   }
 
   .filter-search {
-    width: 100%;
+    flex-basis: 100%;
+    max-width: none;
   }
 
   .app-subtitle {

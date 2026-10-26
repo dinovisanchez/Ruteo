@@ -35,6 +35,13 @@ const entraEnElDia = (a, dia, hoy) => {
   return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
 };
 const ISO_DAY = 'YYYY-MM-DD';
+// Pending OTs of any date: overdue first, then today, the next days and those without a date
+const GRUPOS_PENDIENTES = { vencida: 0, hoy: 1, proxima: 2, sin_fecha: 3 };
+const grupoPendiente = (fecha, hoy) => {
+  if (!fecha) return 'sin_fecha';
+  if (fecha < hoy) return 'vencida';
+  return fecha === hoy ? 'hoy' : 'proxima';
+};
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // Everything the name search looks at
@@ -107,7 +114,8 @@ function App() {
   const hoy = useHoy();
   const [dia, setDia] = useState(hoy);
   const [vista, setVista] = useState('lista');
-  // Filters: name search, status and who it is assigned to (the date is the plan day)
+  // Filters: name search, status and who it is assigned to (the date is the plan day). The status
+  // "backlog" is everything left to assign, whatever its date
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('todas');
   const [asignadoA, setAsignadoA] = useState([]);
@@ -228,6 +236,8 @@ function App() {
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
+    // Choosing a day goes back to that day's plan
+    setEstado((actual) => (actual === 'backlog' ? 'pendientes' : actual));
     if (baseRef.current) handleAssign(baseRef.current, { dia: nuevo });
   };
 
@@ -258,7 +268,7 @@ function App() {
   // Whether a decision passes the filters; the counts can leave out the status or destination filter
   const pasaFiltros = useCallback((d, { porEstado = true, porDestino = true } = {}) => {
     const texto = normalizeText(busqueda.trim());
-    return (!porEstado || estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+    return (!porEstado || estado === 'todas' || (estado === 'asignadas' ? d.situacion === 'asignada' : d.situacion === 'pendiente'))
       && (!porDestino || !destino || d.enviar_a === destino)
       && matchesAssignee(d, asignadoA)
       && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto));
@@ -288,8 +298,35 @@ function App() {
     };
   }, [result, pasaFiltros]);
 
-  // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
+  // Every OT still pending in Metabase, whatever its date, with its decision if it is in the day's plan.
+  // The search and "Asignado a" apply too (an OT of another day has nobody yet)
+  const pendientesTodas = useMemo(() => {
+    const texto = normalizeText(busqueda.trim());
+    const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    return (ots || [])
+      .filter((a) => a.situacion === 'pendiente')
+      .map((a) => ({ actividad: a, grupo: grupoPendiente(a.fecha_visita, hoy), decision: decisiones[a.codigo_bia] }))
+      .filter(({ actividad: a, decision: d }) => (!asignadoA.length || (d && matchesAssignee(d, asignadoA)))
+        && (!texto || searchText(a.codigo_bia, a, d?.responsable).includes(texto)))
+      .sort((x, y) => (GRUPOS_PENDIENTES[x.grupo] - GRUPOS_PENDIENTES[y.grupo])
+        || (x.actividad.fecha_visita || '').localeCompare(y.actividad.fecha_visita || ''));
+  }, [ots, result, hoy, busqueda, asignadoA]);
+
+  const porAsignar = useMemo(() => {
+    const cuantas = (grupo) => pendientesTodas.filter((p) => p.grupo === grupo).length;
+    return {
+      total: pendientesTodas.length,
+      vencidas: cuantas('vencida'),
+      hoy: cuantas('hoy'),
+      proximas: cuantas('proxima'),
+      sinFecha: cuantas('sin_fecha'),
+    };
+  }, [pendientesTodas]);
+
+  // The full table shows the OTs of the day (pending and assigned for that date) with the same filters,
+  // or every pending OT when "Falta por asignar" is selected
   const otsFiltradas = useMemo(() => {
+    if (estado === 'backlog') return pendientesTodas.map((p) => p.actividad);
     const texto = normalizeText(busqueda.trim());
     const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
     return (ots || []).filter((a) => (
@@ -299,21 +336,24 @@ function App() {
       && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
-  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA]);
+  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA, pendientesTodas]);
 
-  // Everything still pending in Metabase, whatever its date: what is left to assign. The tile shows
-  // it while no person or search is selected (the pending OTs of other days have no plan yet)
-  const porAsignar = useMemo(() => {
-    if (busqueda.trim() || asignadoA.length) return null;
-    const pendientes = (ots || []).filter((a) => a.situacion === 'pendiente');
-    return {
-      total: pendientes.length,
-      vencidas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita < hoy).length,
-      hoy: pendientes.filter((a) => a.fecha_visita === hoy).length,
-      proximas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita > hoy).length,
-      sinFecha: pendientes.filter((a) => !a.fecha_visita).length,
-    };
-  }, [ots, hoy, busqueda, asignadoA]);
+  const backlog = estado === 'backlog';
+  // The map and the routes are of one day: "Falta por asignar" is a list
+  const cambiarVista = (nueva) => {
+    setVista(nueva);
+    if (backlog && (nueva === 'mapa' || nueva === 'rutas')) setEstado('pendientes');
+  };
+  const filtrarEstado = (nuevo) => {
+    setEstado(nuevo);
+    if (nuevo === 'backlog' && (vista === 'mapa' || vista === 'rutas')) setVista('lista');
+  };
+  // From the list of everything pending: plan the day of that OT (overdue and undated ones, today)
+  const planearDia = (fecha) => {
+    const objetivo = fecha && fecha > hoy ? fecha : hoy;
+    setEstado('pendientes');
+    if (objetivo !== dia) changeDay(objetivo);
+  };
 
   const busy = loading || panelState.fetching;
   const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
@@ -394,12 +434,12 @@ function App() {
           <Content>
             <div className="title-row">
               <div>
-                <div className="eyebrow">{dia === hoy ? 'Hoy' : 'Plan del día'}</div>
-                <div className="large-title">{capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
+                <div className="eyebrow">{backlog ? 'Falta por asignar' : (dia === hoy ? 'Hoy' : 'Plan del día')}</div>
+                <div className="large-title">{backlog ? 'Todas las fechas' : capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
               </div>
               <Segmented
                 value={vista}
-                onChange={setVista}
+                onChange={cambiarVista}
                 options={[
                   { value: 'lista', label: 'Lista' },
                   { value: 'mapa', label: 'Mapa' },
@@ -448,11 +488,19 @@ function App() {
               {vista !== 'utilizacion' && (
               <Segmented
                 value={estado}
-                onChange={setEstado}
+                onChange={filtrarEstado}
                 options={[
                   { value: 'todas', label: `Todas${conteos ? ` ${conteos.todas}` : ''}` },
                   { value: 'pendientes', label: `Por asignar${conteos ? ` ${conteos.pendiente}` : ''}` },
                   { value: 'asignadas', label: `Asignadas${conteos ? ` ${conteos.asignada}` : ''}` },
+                  ...(ots ? [{
+                    value: 'backlog',
+                    label: (
+                      <Tooltip title="Todas las OTs pendientes de Metabase, sin importar la fecha">
+                        {`Falta por asignar ${porAsignar.total}`}
+                      </Tooltip>
+                    ),
+                  }] : []),
                 ]}
               />
               )}
@@ -493,7 +541,13 @@ function App() {
               )}
               {vista === 'tabla' && (
                 ots?.length ? (
-                  <OtsTable ots={otsFiltradas} nuevas={nuevas} mapeo={mapeo} config={config} title={`OTs del día (${otsFiltradas.length})`} />
+                  <OtsTable
+                    ots={otsFiltradas}
+                    nuevas={nuevas}
+                    mapeo={mapeo}
+                    config={config}
+                    title={backlog ? `Falta por asignar, todas las fechas (${otsFiltradas.length})` : `OTs del día (${otsFiltradas.length})`}
+                  />
                 ) : <EmptyState />
               )}
               {vista === 'utilizacion' && (
@@ -518,11 +572,14 @@ function App() {
                   visibles={visibles}
                   conteos={conteos}
                   porAsignar={porAsignar}
+                  pendientesTodas={backlog ? pendientesTodas : null}
+                  onPlanearDia={planearDia}
+                  hoy={hoy}
                   horasDia={capacidad.horasSemana / capacidad.diasSemana}
                   estado={estado}
                   destino={destino}
                   onFiltrar={({ estado: nuevoEstado, destino: nuevoDestino }) => {
-                    if (nuevoEstado !== undefined) setEstado(nuevoEstado);
+                    if (nuevoEstado !== undefined) filtrarEstado(nuevoEstado);
                     if (nuevoDestino !== undefined) setDestino(nuevoDestino);
                   }}
                   fijas={fijas}

@@ -3,6 +3,7 @@ import {
   Table, Collapse, Button, Tooltip, Descriptions, Select,
 } from 'antd';
 import { DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
@@ -35,6 +36,26 @@ const otCell = (actividad, codigo, nuevas) => (
     <div className="ot-cell-sub">{[actividad?.servicio, actividad?.nombre, actividad?.ciudad].filter(Boolean).join(' · ')}</div>
   </div>
 );
+
+const plural = (n, singular, varias) => `${n}\u00a0${n === 1 ? singular : varias}`;
+
+// When each pending OT is due, with how late or how soon
+const fechaPendiente = (actividad, grupo, hoy) => {
+  const fecha = actividad.fecha_visita;
+  if (!fecha) return <span className="state"><Dot color="#C7C7CC" />Sin fecha</span>;
+  const dias = Math.abs(dayjs(fecha).diff(dayjs(hoy), 'day'));
+  const estado = {
+    vencida: ['#FF3B30', `Vencida hace ${plural(dias, 'día', 'días')}`],
+    hoy: ['#FF9500', 'Para hoy'],
+    proxima: ['#007AFF', `En ${plural(dias, 'día', 'días')}`],
+  }[grupo];
+  return (
+    <div>
+      <span className="state"><Dot color={estado[0]} />{estado[1]}</span>
+      <div className="ot-cell-sub">{dayjs(fecha).format('ddd D MMM YYYY')}</div>
+    </div>
+  );
+};
 
 const DetailRow = ({ row, alternativas }) => {
   const { decision: d, actividad } = row;
@@ -179,7 +200,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 
 const AssignmentResults = ({
   result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
-  onFiltrar, horasDia = 8.4, porAsignar = null,
+  onFiltrar, horasDia = 8.4, porAsignar = null, pendientesTodas = null, onPlanearDia, hoy,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
@@ -244,19 +265,24 @@ const AssignmentResults = ({
       color: '#C93400',
       active: estado === 'pendientes',
       onClick: porEstado('pendientes'),
-      // Without a person or search selected: everything still pending in Metabase, of any date
-      // (non-breaking spaces: when it wraps, it wraps between the two parts)
-      sub: porAsignar ? `${porAsignar.total}\u00a0en\u00a0total${porAsignar.vencidas
-        ? ` · ${porAsignar.vencidas}\u00a0${porAsignar.vencidas > 1 ? 'vencidas' : 'vencida'}` : ''}` : null,
-      hint: porAsignar ? [
-        `Pendientes del día: ${c.pendiente}`,
-        `Pendientes en total: ${porAsignar.total}`,
+      hint: 'Pendientes que entran en el plan de este día',
+    },
+    // Everything still pending in Metabase, whatever its date
+    porAsignar ? {
+      title: 'Falta por asignar',
+      value: porAsignar.total,
+      color: '#C93400',
+      active: estado === 'backlog',
+      onClick: porEstado('backlog'),
+      sub: `todas\u00a0las\u00a0fechas${porAsignar.vencidas ? ` · ${plural(porAsignar.vencidas, 'vencida', 'vencidas')}` : ''}`,
+      hint: [
+        'Pendientes de Metabase, sin importar la fecha:',
         `· vencidas: ${porAsignar.vencidas}`,
         `· para hoy: ${porAsignar.hoy}`,
         `· próximos días: ${porAsignar.proximas}`,
         `· sin fecha: ${porAsignar.sinFecha}`,
-      ].join('\n') : null,
-    },
+      ].join('\n'),
+    } : null,
     { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
     { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
     metricas.ots_externas
@@ -282,6 +308,36 @@ const AssignmentResults = ({
       ? `Técnicos de Bia en Metabase que no están en la app: ${metricas.bia_sin_registrar.join(', ')} (agrégalos en Técnicos → Gestionar)`
       : null,
   ].filter(Boolean);
+
+  const backlogColumns = [
+    {
+      title: 'OT',
+      fixed: 'left',
+      width: 280,
+      render: (_, p) => otCell(p.actividad, p.actividad.codigo_bia, nuevas),
+    },
+    { title: 'Fecha de visita', width: 190, render: (_, p) => fechaPendiente(p.actividad, p.grupo, hoy) },
+    { title: 'OR', width: 120, render: (_, p) => p.actividad.or_operador },
+    {
+      title: `Plan del ${dayjs(metricas.dia).format('D MMM')}`,
+      width: 240,
+      render: (_, p) => (p.decision ? (
+        <div className="assignee">
+          <div className="assignee-name">{p.decision.responsable || DESTINO[p.decision.enviar_a]}</div>
+          <div className="assignee-sub">{DESTINO[p.decision.enviar_a]}</div>
+        </div>
+      ) : <span className="muted-text">No entra en este día</span>),
+    },
+    {
+      title: '',
+      width: 150,
+      render: (_, p) => (
+        <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={() => onPlanearDia?.(p.actividad.fecha_visita)}>
+          {p.grupo === 'proxima' ? `Planear el ${dayjs(p.actividad.fecha_visita).format('D MMM')}` : 'Planear hoy'}
+        </Button>
+      ),
+    },
+  ];
 
   const columns = [
     {
@@ -351,7 +407,13 @@ const AssignmentResults = ({
         ))}
       </div>
       <div className="summary-note">
-        {visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
+        {pendientesTodas && porAsignar && (
+          <span className="summary-count">
+            {plural(porAsignar.total, 'OT', 'OTs')} por asignar: {plural(porAsignar.vencidas, 'vencida', 'vencidas')}
+            {' · '}{porAsignar.hoy} para hoy · {porAsignar.proximas} de próximos días · {porAsignar.sinFecha} sin fecha
+          </span>
+        )}
+        {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
         {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
@@ -360,7 +422,19 @@ const AssignmentResults = ({
         </Tooltip>
       </div>
 
-      {view === 'lista' && (
+      {view === 'lista' && pendientesTodas && (
+        <Table
+          className="plain-table"
+          size="middle"
+          rowKey={(p) => p.actividad.codigo_bia}
+          columns={backlogColumns}
+          dataSource={pendientesTodas}
+          scroll={{ x: 980 }}
+          pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
+        />
+      )}
+
+      {view === 'lista' && !pendientesTodas && (
         <Table
           className="plain-table"
           size="middle"
