@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from shared.catalogo import cargar_catalogo, nombre_empresa, normalizar_texto
 from shared.operadores import cargar_operadores, clave, normalizar_departamento, resolver_or
+from shared.zonas import cargar_zonas
 from shared.config import settings
 from shared.models import (
     Activity,
@@ -25,13 +26,15 @@ from shared.models import (
     JornadaConfig,
     ModoAsignacion,
     OperadorRed,
+    CoberturaEquipo,
     SedeOperativa,
     Tecnico,
+    ZonaTransito,
 )
 from shared.utils import setup_logging
 from . import metabase
 from .geocoding import geocodificar
-from .trazado import trazar
+from .trazado import matriz_vial, trazar
 
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
@@ -48,6 +51,7 @@ BASES_POR_NOMBRE = {"costa": "bia-barranquilla", "caribe": "bia-barranquilla", "
 
 _catalogo: Optional[Dict] = None
 _operadores: Optional[List[OperadorRed]] = None
+_zonas: Optional[Tuple[List[CoberturaEquipo], List[ZonaTransito]]] = None
 
 
 def obtener_catalogo(recargar: bool = False) -> Dict:
@@ -65,6 +69,15 @@ def obtener_operadores() -> List[OperadorRed]:
         _operadores = cargar_operadores()
         logger.info(f"Catálogo de OR cargado: {len(_operadores)} operadores")
     return _operadores
+
+
+def obtener_zonas() -> Tuple[List[CoberturaEquipo], List[ZonaTransito]]:
+    """Cobertura de los equipos Bia y zonas de tránsito (data/zonas_bia.json)"""
+    global _zonas
+    if _zonas is None:
+        _zonas = cargar_zonas()
+        logger.info(f"Zonas cargadas: {len(_zonas[0])} equipos Bia, {len(_zonas[1])} zonas de tránsito")
+    return _zonas
 
 
 def tecnicos_de_la_hoja() -> List[Tecnico]:
@@ -124,6 +137,8 @@ class AsignarRequest(BaseModel):
     dia: Optional[str] = None
     # Ediciones a mano: OT → "tecnico:<id>", "empresa:<id>", "contratista" o "auto" (que decida la app)
     fijas: Dict[str, str] = Field(default_factory=dict)
+    # Zonas de tránsito con el recargo editado en la app; vacío = las de data/zonas_bia.json
+    transito: List[ZonaTransito] = Field(default_factory=list)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
@@ -333,6 +348,16 @@ async def operadores(nombres: List[str] = Query(default=[])):
     }
 
 
+@router.get("/zonas", response_model=dict)
+async def zonas():
+    """Qué OTs atiende cada equipo Bia (por OR y zona) y el recargo de tránsito de cada zona"""
+    coberturas, transito = obtener_zonas()
+    return {
+        "equipos": [c.model_dump() for c in coberturas],
+        "transito": [z.model_dump() for z in transito],
+    }
+
+
 @router.get("/tecnicos/hoja", response_model=List[Tecnico])
 async def tecnicos_hoja():
     """Técnicos de la pestaña "Tecnicos" de la hoja, listos para agregar"""
@@ -424,6 +449,21 @@ async def asignar(request: AsignarRequest):
         if not en_cuadrilla & set(pareja):
             cuadrillas.append(pareja)
 
+    coberturas, transito = obtener_zonas()
+    jornada = request.jornada.model_copy(update={"zonas_transito": request.transito or transito})
+
+    # Tiempos por las vías entre las OTs del día y todas las sedes (bases y contratistas)
+    puntos = [[s.coordinates.latitude, s.coordinates.longitude] for s in sedes]
+    for actividad in actividades:
+        if actividad.coordinates is None and actividad.gps:
+            try:
+                actividad.parse_coordinates()
+            except ValueError:
+                pass
+        if actividad.coordinates is not None:
+            puntos.append([actividad.coordinates.latitude, actividad.coordinates.longitude])
+    matriz, aviso_vias = await matriz_vial(puntos)
+
     pedido = AssignmentRequest(
         modo=request.modo,
         actividades=actividades,
@@ -435,7 +475,9 @@ async def asignar(request: AsignarRequest):
         fijas=fijas,
         externas=externas,
         notas=notas,
-        jornada=request.jornada,
+        coberturas=coberturas,
+        matriz=matriz,
+        jornada=jornada,
     )
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
@@ -449,6 +491,11 @@ async def asignar(request: AsignarRequest):
         raise HTTPException(status_code=respuesta.status_code, detail=respuesta.json().get("detail", respuesta.text))
     resultado = AssignmentResult(**respuesta.json())
     resultado.metricas.update(metricas_dia)
+    resultado.metricas["tiempos_por_vias"] = matriz is not None
+    resultado.metricas["aviso_vias"] = aviso_vias
+    resultado.metricas["transito"] = [
+        {"nombre": z.nombre, "recargo_pct": z.recargo_pct, "minutos_extra": z.minutos_extra} for z in jornada.zonas_transito
+    ]
     return resultado
 
 

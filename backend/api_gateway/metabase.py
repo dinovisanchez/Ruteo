@@ -42,8 +42,17 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     "fecha_visita": ["fecha de la visita", "fecha visita", "fecha"],
     "asignado_a": ["electricistas asignados", "electricistas", "tecnicos asignados", "tecnico asignado"],
     "contratista_asignado": ["contratista asignado", "contratista"],
+    # La duración de una instalación depende del tipo de medida
+    "tipo_medida": ["tipo de medida", "tipo medida", "medida", "measurement type", "measurement type id"],
 }
 SERVICIO_POR_DEFECTO = "default"
+
+# Tipo de medida (como viene de Olibia o en español) → como se nombra en el tipo de OT
+_MEDIDAS = {
+    "direct": "directa", "directa": "directa",
+    "semi direct": "semidirecta", "semidirect": "semidirecta", "semidirecta": "semidirecta", "semi directa": "semidirecta",
+    "indirect": "indirecta", "indirecta": "indirecta",
+}
 
 
 class MetabaseError(Exception):
@@ -220,6 +229,16 @@ def _fecha(valor: Any) -> Optional[str]:
         return None
 
 
+def _servicio(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
+    """Tipo de OT; las instalaciones llevan el tipo de medida ("Instalación semidirecta")"""
+    servicio = _texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO
+    if "tipo_medida" in mapeo and normalizar_texto(servicio) == "instalacion":
+        medida = _MEDIDAS.get(re.sub(r"[^a-z]+", " ", normalizar_texto(_texto(fila.get(mapeo["tipo_medida"])))).strip())
+        if medida:
+            return f"{servicio} {medida}"
+    return servicio
+
+
 def filas_a_actividades(
     filas: List[Dict[str, Any]],
     mapeo_manual: Optional[Dict[str, str]] = None,
@@ -268,7 +287,7 @@ def filas_a_actividades(
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
-            servicio=_texto(fila.get(mapeo.get("servicio", ""))) or SERVICIO_POR_DEFECTO,
+            servicio=_servicio(fila, mapeo),
             gps=f"{coords.latitude},{coords.longitude}" if coords else "",
             nombre=_texto(fila.get(mapeo.get("nombre", ""))),
             direccion=_texto(fila.get(mapeo.get("direccion", ""))),

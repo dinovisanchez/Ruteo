@@ -149,6 +149,15 @@ export const getSheetTechnicians = async () => {
 };
 
 /**
+ * Bia teams (which OR and zones each one covers) and traffic zones with their surcharge
+ * @returns {Promise<Object>} { equipos: [{ base_id, equipo, ors, zonas }], transito: [{ nombre, recargo_pct, minutos_extra }] }
+ */
+export const getZones = async () => {
+  const response = await apiClient.get('/zonas');
+  return response.data;
+};
+
+/**
  * Road geometry of routes (OSRM), to draw them along the streets
  * @param {Object[]} rutas - [{ id, puntos: [[lat, lon], ...] }] in visiting order
  * @returns {Promise<Object>} { rutas: { [id]: { geometria: [[lat, lon], ...], km } }, aviso? }

@@ -14,9 +14,11 @@ from shared.models import (
     DecisionOT,
     AssignmentRequest,
     AssignmentResult,
+    CoberturaEquipo,
     CrewRoute,
     GPSCoordinates,
     JornadaConfig,
+    MatrizVial,
     OperadorRed,
     OpcionContratista,
     RecomendacionContratista,
@@ -24,8 +26,10 @@ from shared.models import (
     RutaAsignada,
     SedeOperativa,
     Tecnico,
+    ZonaTransito,
 )
 from shared.operadores import clave, normalizar_departamento, resolver_or
+from shared.zonas import atiende_or, en_zona, recargo_transito
 from shared.config import settings
 from shared.utils import (
     add_minutes_to_time,
@@ -46,20 +50,64 @@ PESO_RUTA_MAS_LARGA = 10
 # Costo por minuto que una ruta supera la carga promedio de su base (segunda pasada)
 PESO_EXCESO_META = 20
 MAX_ALTERNATIVAS = 3
+# Sin OSRM, los primeros km de cada desplazamiento son urbanos y el resto es carretera
+KM_URBANOS = 15
 
 
 class Distancias:
-    """Distancia por vía aproximada: línea recta × factor vial, a velocidad promedio"""
+    """Distancia y tiempo de desplazamiento entre dos puntos.
 
-    def __init__(self, jornada: JornadaConfig):
+    Con la matriz de OSRM se usan los km y minutos por las vías; sin ella (o para
+    puntos que no están en la matriz), la línea recta × factor vial, con los primeros
+    km a la velocidad promedio y el resto a la de carretera. Al tiempo se le suma el recargo de tránsito de la zona donde empieza
+    o termina el desplazamiento (el mayor de las dos).
+    """
+
+    def __init__(self, jornada: JornadaConfig, matriz: Optional[MatrizVial] = None):
         self.factor = jornada.factor_vial
         self.velocidad = jornada.velocidad_promedio_kmh
+        self.velocidad_carretera = jornada.velocidad_carretera_kmh
+        self.zonas = jornada.zonas_transito
+        self.matriz = matriz
+        self._indice = {self._clave(lat, lon): i for i, (lat, lon) in enumerate(matriz.puntos)} if matriz else {}
+        self._zona: Dict[Tuple[float, float], Optional[ZonaTransito]] = {}
+
+    @staticmethod
+    def _clave(lat: float, lon: float) -> Tuple[float, float]:
+        return (round(lat, 5), round(lon, 5))
+
+    def _vial(self, a: GPSCoordinates, b: GPSCoordinates, campo: str) -> Optional[float]:
+        i = self._indice.get(self._clave(a.latitude, a.longitude))
+        j = self._indice.get(self._clave(b.latitude, b.longitude))
+        if i is None or j is None:
+            return None
+        return getattr(self.matriz, campo)[i][j]
+
+    def zona(self, punto: GPSCoordinates) -> Optional[ZonaTransito]:
+        clave_punto = self._clave(punto.latitude, punto.longitude)
+        if clave_punto not in self._zona:
+            self._zona[clave_punto] = recargo_transito(self.zonas, punto)
+        return self._zona[clave_punto]
 
     def km(self, a: GPSCoordinates, b: GPSCoordinates) -> float:
-        return haversine_distance(a, b) * self.factor
+        vial = self._vial(a, b, "km")
+        return vial if vial is not None else haversine_distance(a, b) * self.factor
 
     def minutos(self, a: GPSCoordinates, b: GPSCoordinates) -> int:
-        return int(math.ceil(self.km(a, b) / self.velocidad * 60))
+        vial = self._vial(a, b, "minutos")
+        if vial is not None:
+            base = vial
+        else:
+            km = haversine_distance(a, b) * self.factor
+            urbanos = min(km, KM_URBANOS)
+            carretera = max(self.velocidad, self.velocidad_carretera)
+            base = urbanos / self.velocidad * 60 + (km - urbanos) / carretera * 60
+        if base <= 0:
+            return 0
+        zonas = [z for z in (self.zona(a), self.zona(b)) if z]
+        if zonas:
+            base = base * (1 + max(z.recargo_pct for z in zonas) / 100) + max(z.minutos_extra for z in zonas)
+        return int(math.ceil(base))
 
 
 def _tiempos_servicio(jornada: JornadaConfig) -> Dict[str, int]:
@@ -290,6 +338,7 @@ def armar_cuadrillas(
     actividades: List[Activity],
     sedes: Dict[str, SedeOperativa],
     jornada: JornadaConfig,
+    bases_permitidas: Optional[Dict[str, Set[str]]] = None,
 ) -> List[List[Tecnico]]:
     """Agrupa a los técnicos disponibles en cuadrillas de 1 o 2 personas.
 
@@ -316,7 +365,9 @@ def armar_cuadrillas(
     for actividad in actividades:
         if actividad.personas_requeridas < 2:
             continue
-        base = min(bases, key=lambda b: haversine_distance(sedes[b].coordinates, actividad.coordinates))
+        permitidas = (bases_permitidas or {}).get(actividad.codigo_bia)
+        candidatas = [b for b in bases if not permitidas or b in permitidas] or bases
+        base = min(candidatas, key=lambda b: haversine_distance(sedes[b].coordinates, actividad.coordinates))
         minutos_pareja[base] += get_service_time(actividad.servicio, servicios)
 
     max_minutos = int(jornada.horas_laborales * 60)
@@ -362,17 +413,21 @@ def _asignar_inhouse(
     tecnicos: List[Tecnico],
     request: AssignmentRequest,
     dist: Distancias,
+    bases_permitidas: Optional[Dict[str, Set[str]]] = None,
 ) -> Tuple[List[RutaAsignada], List[ActividadSinAsignar], Dict]:
     """Reparte las OTs entre cuadrillas de los técnicos disponibles, cada una saliendo de su base.
 
     `fijas` (OT → id de técnico) obliga a que la OT vaya a la cuadrilla de ese
     técnico; si no cabe en su jornada igual se le deja, y la ruta muestra el exceso.
+    `bases_permitidas` (OT → bases) limita la OT a las cuadrillas del equipo que la cubre.
     """
     sedes = {s.id: s for s in request.sedes}
+    bases_permitidas = bases_permitidas or {}
     libres = [a for a in actividades if a.codigo_bia not in fijas]
-    cuadrillas = armar_cuadrillas(tecnicos, request.cuadrillas, libres, sedes, request.jornada)
+    cuadrillas = armar_cuadrillas(tecnicos, request.cuadrillas, libres, sedes, request.jornada, bases_permitidas)
     cuadrilla_de = {t.id: v for v, c in enumerate(cuadrillas) for t in c}
     personas = [len(c) for c in cuadrillas]
+    grupos = [c[0].base_id for c in cuadrillas]
 
     atendibles: List[Activity] = []
     permitidos: List[List[int]] = []
@@ -382,7 +437,11 @@ def _asignar_inhouse(
         if tecnico_id is not None:
             lista = [cuadrilla_de[tecnico_id]]
         else:
-            lista = [v for v, p in enumerate(personas) if p >= actividad.personas_requeridas]
+            permitidas = bases_permitidas.get(actividad.codigo_bia)
+            lista = [
+                v for v, p in enumerate(personas)
+                if p >= actividad.personas_requeridas and (not permitidas or grupos[v] in permitidas)
+            ]
             if not lista:
                 sin_asignar.append(ActividadSinAsignar(
                     actividad=actividad,
@@ -393,7 +452,6 @@ def _asignar_inhouse(
         permitidos.append(lista)
     fijadas = {i for i, a in enumerate(atendibles) if a.codigo_bia in fijas}
     inicios = [sedes[c[0].base_id].coordinates for c in cuadrillas]
-    grupos = [c[0].base_id for c in cuadrillas]
 
     def resolver(indices: List[int], vehiculos: List[int]) -> Tuple[Dict[int, List[int]], List[int]]:
         """Resuelve solo esas actividades con esas cuadrillas; índices sobre `atendibles`"""
@@ -721,7 +779,7 @@ def _decisiones(
     fijadas: Set[str],
 ) -> List[DecisionOT]:
     """Una decisión por OT: a quién enviarla y por qué, en el orden en que llegaron"""
-    dist = Distancias(request.jornada)
+    dist = Distancias(request.jornada, request.matriz)
     por_codigo = {r.codigo_bia: r for r in recomendaciones}
     decisiones: Dict[str, DecisionOT] = {}
 
@@ -819,6 +877,29 @@ def _resultado(
     )
 
 
+def _equipos_que_cubren(actividad: Activity, request: AssignmentRequest) -> List[CoberturaEquipo]:
+    """Equipos Bia que atienden el OR de la OT en la zona donde está"""
+    return [
+        c for c in request.coberturas
+        if atiende_or(c, actividad.or_operador, request.operadores) and (
+            not c.zonas or any(
+                en_zona(z, actividad.ciudad, actividad.departamento, actividad.coordinates) for z in c.zonas
+            )
+        )
+    ]
+
+
+def _fuera_de_cobertura(actividad: Activity, equipos: List[CoberturaEquipo], request: AssignmentRequest) -> str:
+    if equipos:
+        return f"{equipos[0].equipo} no tiene técnicos disponibles"
+    del_or = [c for c in request.coberturas if atiende_or(c, actividad.or_operador, request.operadores)]
+    if del_or:
+        zonas = ", ".join(z.nombre for z in del_or[0].zonas)
+        return f"{actividad.ciudad or 'La OT'} está fuera de la zona del {del_or[0].equipo} ({zonas})"
+    operador = resolver_or(actividad.or_operador, request.operadores)
+    return f"Ningún equipo Bia atiende {operador.nombre if operador else actividad.or_operador}"
+
+
 def _agregar_motivo(motivos: Dict[str, str], codigo: str, texto: str) -> None:
     motivos[codigo] = f"{motivos[codigo]}. {texto}" if codigo in motivos else texto
 
@@ -836,7 +917,7 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
     tecnicos = [t for t in request.tecnicos if t.base_id in sedes]
     disponibles = {t.id for t in tecnicos}
     empresas = {s.empresa_id for s in request.sedes if s.tipo == "contratista"}
-    dist = Distancias(request.jornada)
+    dist = Distancias(request.jornada, request.matriz)
 
     actividades, sin_asignar = _separar_sin_coordenadas(
         [a for a in request.actividades if a.codigo_bia not in request.externas]
@@ -848,6 +929,7 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
     para_tecnicos: List[Activity] = []
     para_contratistas: List[Activity] = []
     libres: List[Activity] = []
+    bases_permitidas: Dict[str, Set[str]] = {}
     for actividad in actividades:
         codigo = actividad.codigo_bia
         tipo, _, destino = request.fijas.get(codigo, "").partition(":")
@@ -876,10 +958,29 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
         if not tecnicos:
             raise ValueError("Selecciona al menos un técnico con una base válida")
         para_tecnicos += libres
+        # Si un equipo con técnicos disponibles cubre la OT, va a ese equipo
+        for actividad in libres:
+            bases = {c.base_id for c in _equipos_que_cubren(actividad, request)} & {t.base_id for t in tecnicos}
+            if bases:
+                bases_permitidas[actividad.codigo_bia] = bases
     elif not tecnicos:
         for actividad in libres:
             _agregar_motivo(motivos_previos, actividad.codigo_bia, "No hay técnicos disponibles")
         para_contratistas += libres
+    elif request.coberturas:
+        # Cada OT va al equipo Bia que cubre su OR y su zona, si ese equipo tiene técnicos disponibles
+        bases_con_tecnicos = {t.base_id for t in tecnicos}
+        for actividad in libres:
+            equipos = _equipos_que_cubren(actividad, request)
+            con_tecnicos = {c.base_id for c in equipos if c.base_id in bases_con_tecnicos}
+            if con_tecnicos:
+                bases_permitidas[actividad.codigo_bia] = con_tecnicos
+                equipo = next(c.equipo for c in equipos if c.base_id in con_tecnicos)
+                _agregar_motivo(motivos_previos, actividad.codigo_bia, f"Le corresponde al {equipo}")
+                para_tecnicos.append(actividad)
+            else:
+                _agregar_motivo(motivos_previos, actividad.codigo_bia, _fuera_de_cobertura(actividad, equipos, request))
+                para_contratistas.append(actividad)
     else:
         radio = request.jornada.radio_inhouse_km
         extra["radio_inhouse_km"] = radio
@@ -900,7 +1001,7 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
     rutas: List[RutaAsignada] = []
     if para_tecnicos:
         rutas_tecnicos, sobrantes, extra_tecnicos = _asignar_inhouse(
-            para_tecnicos, fijas_tecnico, tecnicos, request, dist
+            para_tecnicos, fijas_tecnico, tecnicos, request, dist, bases_permitidas
         )
         rutas += rutas_tecnicos
         extra.update(extra_tecnicos)

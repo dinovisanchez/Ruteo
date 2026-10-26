@@ -1,0 +1,48 @@
+{
+  "equipos": [
+    {
+      "base_id": "bia-barranquilla",
+      "equipo": "Equipo Bia Costa",
+      "ors": ["Air-e", "Afinia", "Electricaribe"],
+      "zonas": [
+        {
+          "nombre": "Barranquilla y alrededores",
+          "latitud": 10.9685, "longitud": -74.7813, "radio_km": 25,
+          "departamento": "Atlántico",
+          "municipios": ["Barranquilla", "Soledad", "Malambo", "Puerto Colombia", "Galapa", "Baranoa",
+                         "Sabanagrande", "Santo Tomás", "Palmar de Varela"]
+        },
+        {
+          "nombre": "Santa Marta",
+          "latitud": 11.2408, "longitud": -74.199, "radio_km": 20,
+          "departamento": "Magdalena",
+          "municipios": ["Santa Marta"]
+        },
+        {
+          "nombre": "Ciénaga",
+          "latitud": 11.007, "longitud": -74.247, "radio_km": 12,
+          "departamento": "Magdalena",
+          "municipios": ["Ciénaga"]
+        },
+        {
+          "nombre": "Cartagena y alrededores",
+          "latitud": 10.391, "longitud": -75.4794, "radio_km": 25,
+          "departamento": "Bolívar",
+          "municipios": ["Cartagena", "Cartagena de Indias", "Turbaco", "Arjona", "Santa Rosa", "Turbaná",
+                         "Clemencia", "Santa Catalina", "Villanueva"]
+        }
+      ]
+    },
+    {
+      "base_id": "bia-bogota",
+      "equipo": "Equipo Bia Bogotá",
+      "ors": ["Enel"],
+      "zonas": []
+    }
+  ],
+  "transito": [
+    {"nombre": "Bogotá", "latitud": 4.651, "longitud": -74.095, "radio_km": 25, "recargo_pct": 20, "minutos_extra": 0},
+    {"nombre": "Barranquilla", "latitud": 10.9685, "longitud": -74.7813, "radio_km": 20, "recargo_pct": 15, "minutos_extra": 0},
+    {"nombre": "Cartagena", "latitud": 10.391, "longitud": -75.4794, "radio_km": 18, "recargo_pct": 10, "minutos_extra": 0}
+  ]
+}

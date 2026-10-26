@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState,
+} from 'react';
 import {
-  Card, Button, Input, Space, Switch, InputNumber, Alert, Select, Segmented, Checkbox, Tag, Typography,
+  Button, Input, Space, Switch, InputNumber, Alert, Select, Segmented, Tag, Typography,
   Form, TimePicker, Collapse, Upload, notification, message,
 } from 'antd';
 import {
-  ThunderboltFilled, ReloadOutlined, UploadOutlined, SettingOutlined, WarningOutlined, SaveOutlined,
+  UploadOutlined, WarningOutlined, SaveOutlined, TeamOutlined, ShopOutlined, ToolOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -44,7 +46,20 @@ const countBy = (items, key) => {
   return counts;
 };
 
-const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfigChange, catalog, dia }) => {
+const SectionLabel = ({ icon, title }) => (
+  <span className="ios-section-label">
+    <span className="ios-section-icon">{icon}</span>
+    {title}
+  </span>
+);
+
+/**
+ * Settings of the plan, in collapsible sections. The header calls `extract` and `recalc`
+ * through the ref; `onStateChange` tells it whether they can run.
+ */
+const AssignmentPanel = forwardRef(({
+  ots, onOtsLoaded, onAssign, loading, config, onConfigChange, catalog, dia, zonas, onStateChange,
+}, ref) => {
   const [form] = Form.useForm();
   const [status, setStatus] = useState(null);
   const [cardId, setCardId] = useState('');
@@ -52,14 +67,15 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   const [fetchInfo, setFetchInfo] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [refreshMinutes, setRefreshMinutes] = useState(10);
-  // The question lives in Ajustes; it opens by itself when there is no question saved yet
-  const [ajustesAbiertos, setAjustesAbiertos] = useState([]);
+  // Every section starts minimized; Ajustes opens by itself when there is no question saved yet
+  const [abiertas, setAbiertas] = useState([]);
   const [orFilter, setOrFilter] = useState([]);
   const [modo, setModo] = useState('automatico');
-  // Every active technician is available unless unchecked for the day
+  // Every active technician is available unless switched off for the day
   const [noDisponibles, setNoDisponibles] = useState([]);
   // Manual pairs: technician id → partner id (both directions); empty = the app suggests pairs
   const [parejas, setParejas] = useState({});
+  const [transito, setTransito] = useState([]);
   const [techModalOpen, setTechModalOpen] = useState(false);
   const [orModalOpen, setOrModalOpen] = useState(false);
   const [typesModalOpen, setTypesModalOpen] = useState(false);
@@ -72,12 +88,14 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       .then((s) => {
         setStatus(s);
         if (s.card_id) setCardId(s.card_id);
-        else setAjustesAbiertos(['ajustes']);
+        else setAbiertas(['ajustes']);
       })
       .catch(() => setStatus({ configurado: false, sinBackend: true }));
     getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
     getSheetTechnicians().then(setHojaTecnicos).catch(() => setHojaTecnicos([]));
   }, [onConfigChange]);
+
+  useEffect(() => { setTransito(zonas.transito); }, [zonas]);
 
   const orCounts = useMemo(() => countBy(ots, 'or_operador'), [ots]);
   const serviceCounts = useMemo(() => countBy(ots, 'servicio'), [ots]);
@@ -109,6 +127,20 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
   const tecnicosActivos = config.tecnicos.filter((t) => t.activo !== false);
   const disponibles = tecnicosActivos.filter((t) => !noDisponibles.includes(t.id)).map((t) => t.id);
   const disponiblesKey = disponibles.join('|');
+
+  // Technicians grouped by the Bia team of their base, with what that team covers
+  const equipos = useMemo(() => {
+    const porBase = {};
+    tecnicosActivos.forEach((t) => { (porBase[t.base_id] = porBase[t.base_id] || []).push(t); });
+    return Object.entries(porBase).map(([baseId, tecnicos]) => {
+      const equipo = zonas.equipos.find((e) => e.base_id === baseId);
+      const cubre = equipo
+        ? `${equipo.ors.filter((o) => o !== 'Electricaribe').join(', ')} · ${equipo.zonas.length
+          ? equipo.zonas.map((z) => z.nombre).join(', ') : 'toda su área'}`
+        : 'Sin zona definida';
+      return { baseId, nombre: equipo?.equipo || sedesById[baseId]?.empresa || baseId, cubre, tecnicos };
+    });
+  }, [tecnicosActivos, zonas, sedesById]);
 
   // A pair only makes sense while both technicians are available
   useEffect(() => {
@@ -144,6 +176,7 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       tecnicos_ids: disponibles,
       cuadrillas: cuadrillasManuales,
       personas_por_tipo: Object.fromEntries(tipos.map((s) => [s, otTypeSettings(s, config.tipos_ot).personas])),
+      transito,
       jornada: {
         horario_inicio: values.horario_inicio.format('HH:mm:ss'),
         horas_laborales: values.horas_laborales,
@@ -193,7 +226,17 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
     else if (actividades && !silent) message.info('La pregunta no devolvió OTs');
   };
 
-  // The interval calls the latest version through a ref so it does not restart on every render
+  // The header buttons and the interval call the latest version through a ref
+  const actionsRef = useRef({});
+  actionsRef.current = { extract: () => extractAndRecommend(false), recalc: () => runAssign(ots) };
+  useImperativeHandle(ref, () => ({
+    extract: () => actionsRef.current.extract(),
+    recalc: () => actionsRef.current.recalc(),
+  }), []);
+
+  const canExtract = Boolean(status?.configurado && cardId.trim());
+  useEffect(() => { onStateChange({ canExtract, fetching }); }, [canExtract, fetching, onStateChange]);
+
   const autoRef = useRef(extractAndRecommend);
   autoRef.current = extractAndRecommend;
   useEffect(() => {
@@ -225,42 +268,283 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
     }
   };
 
+  const updateTransito = (nombre, field, value) => {
+    setTransito((prev) => prev.map((z) => (z.nombre === nombre ? { ...z, [field]: value ?? 0 } : z)));
+  };
+
   const busy = fetching || loading;
   const savedCard = config.card_id || status?.card_id;
 
-  return (
+  const tecnicosSection = (
     <>
-      <Button
-        type="primary"
-        size="large"
-        block
-        icon={<ThunderboltFilled />}
-        loading={busy}
-        disabled={!status?.configurado || !cardId.trim()}
-        onClick={() => extractAndRecommend(false)}
-        style={{ height: 52, fontSize: 17, marginBottom: 8 }}
-      >
-        Extraer y recomendar
-      </Button>
-      {ots?.length > 0 && (
-        <Button block icon={<ReloadOutlined />} disabled={busy} onClick={() => runAssign(ots)} style={{ marginBottom: 12 }}>
-          Recalcular con los ajustes actuales
-        </Button>
-      )}
-
-      {fetchInfo && (
-        <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: 12 }}>
-          {fetchInfo.actividades.length} OTs de la pregunta #{fetchInfo.card_id}
-          {fetchInfo.geocodificadas ? ` · ${fetchInfo.geocodificadas} ubicadas por dirección` : ''}
-          {fetchInfo.sin_coordenadas ? ` · ${fetchInfo.sin_coordenadas} sin ubicación` : ''}
-          {fetchInfo.avisos.length ? ` · ${fetchInfo.avisos.length} avisos en Ajustes` : ''}
+      {equipos.length ? equipos.map((equipo) => (
+        <div key={equipo.baseId} className="ios-list">
+          <div className="ios-list-header">
+            <Text strong>{equipo.nombre}</Text>
+            <Text type="secondary" className="ios-list-sub">{equipo.cubre}</Text>
+          </div>
+          {equipo.tecnicos.map((t) => {
+            const available = disponibles.includes(t.id);
+            const partners = tecnicosActivos.filter((o) => o.id !== t.id && disponibles.includes(o.id)
+              && o.base_id === t.base_id && (!parejas[o.id] || parejas[o.id] === t.id));
+            return (
+              <div key={t.id} className={`ios-row${available ? '' : ' ios-row-off'}`}>
+                <div className="ios-row-main">
+                  <div className="ios-row-title">{t.nombre}</div>
+                  <div className="ios-row-sub">
+                    {available ? (parejas[t.id] ? 'En pareja' : 'Disponible') : 'No disponible'}
+                    {t.costo_dia ? ` · ${formatCop(t.costo_dia)}/día` : ''}
+                  </div>
+                </div>
+                {available && partners.length > 0 && (
+                  <Select
+                    size="small"
+                    variant="borderless"
+                    allowClear
+                    placeholder="Pareja"
+                    value={parejas[t.id]}
+                    onChange={(v) => setPareja(t.id, v)}
+                    options={partners.map((o) => ({ value: o.id, label: o.nombre.split(' ')[0] }))}
+                    popupMatchSelectWidth={false}
+                    style={{ width: 96 }}
+                  />
+                )}
+                <Switch
+                  checked={available}
+                  onChange={(checked) => setNoDisponibles((prev) => (checked
+                    ? prev.filter((x) => x !== t.id) : [...prev, t.id]))}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )) : (
+        <Text type="secondary">
+          Sin técnicos registrados: todo se recomendará a contratistas. Agrégalos en «Gestionar».
         </Text>
       )}
+      <Text type="secondary" className="ios-footnote">
+        {cuadrillasManuales.length
+          ? `${cuadrillasManuales.length} pareja(s) armadas a mano; con el resto se arman las que pidan las OTs de 2 personas.`
+          : 'Las parejas para OTs de 2 personas se arman solas (o como ya salen en Metabase).'}
+      </Text>
+      <Space wrap size={6} style={{ marginTop: 8 }}>
+        <Button size="small" shape="round" onClick={() => setTechModalOpen(true)}>Gestionar técnicos</Button>
+        {tecnicosFaltantes.length > 0 && (
+          <Button size="small" shape="round" type="dashed" onClick={addSheetTechnicians}>
+            Agregar {tecnicosFaltantes.length} de la hoja
+          </Button>
+        )}
+      </Space>
+    </>
+  );
+
+  const contratistasSection = (
+    <>
+      {orRows.length ? orRows.map((r) => (
+        <div key={r.key} className="ios-list">
+          <div className="ios-list-header">
+            <Text strong>{r.nombre} <Text type="secondary">({r.ots})</Text></Text>
+            {r.departamentos.length > 0 && <Text type="secondary" className="ios-list-sub">{r.departamentos.join(', ')}</Text>}
+          </div>
+          <div style={{ padding: '6px 12px 8px' }}>
+            {r.manual.length > 0 && r.manual.map((id) => <Tag key={id} color="purple">{empresasById[id]?.nombre || id}</Tag>)}
+            {!r.manual.length && r.auto.length > 0 && r.auto.map((id) => (
+              <Tag key={id} bordered={false}>{empresasById[id]?.nombre || id}</Tag>
+            ))}
+            {!r.manual.length && !r.auto.length && (
+              <Tag icon={<WarningOutlined />} color="warning">
+                {r.desconocido ? 'los de su departamento' : 'sin contratistas en la zona: el más cercano'}
+              </Tag>
+            )}
+          </div>
+        </div>
+      )) : (
+        <Text type="secondary" className="ios-footnote">
+          Cada OT va al contratista más cercano con sede en los departamentos que atiende su OR.
+        </Text>
+      )}
+      <Button size="small" shape="round" style={{ marginTop: 8 }} onClick={() => setOrModalOpen(true)}>Editar contratistas</Button>
+    </>
+  );
+
+  const tiposSection = (
+    <>
+      {services.length ? (
+        <div className="ios-list">
+          {services.map((s) => {
+            const tipo = otTypeSettings(s, config.tipos_ot);
+            return (
+              <div key={s} className="ios-row">
+                <div className="ios-row-main">
+                  <div className="ios-row-title">{s}</div>
+                  <div className="ios-row-sub">{serviceCounts[s]} OTs</div>
+                </div>
+                <Tag bordered={false}>{tipo.minutos >= 60 && tipo.minutos % 60 === 0 ? `${tipo.minutos / 60} h` : `${tipo.minutos} min`}</Tag>
+                <Tag bordered={false} color={tipo.personas > 1 ? 'blue' : undefined}>{tipo.personas} pers.</Tag>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <Text type="secondary" className="ios-footnote">Aparecen al extraer las OTs.</Text>
+      )}
+      <Button size="small" shape="round" style={{ marginTop: 8 }} onClick={() => setTypesModalOpen(true)} disabled={!services.length}>
+        Editar duración y personas
+      </Button>
+    </>
+  );
+
+  const ajustesSection = (
+    <>
+      <div className="ios-field-label">Pregunta de Metabase</div>
+      <Space.Compact style={{ width: '100%' }}>
+        <Input
+          value={cardId}
+          placeholder="Número de la pregunta"
+          onChange={(e) => setCardId(e.target.value)}
+          prefix={<Text type="secondary">#</Text>}
+        />
+        <Button icon={<SaveOutlined />} onClick={saveDefaultCard} disabled={!cardId.trim() || cardId.trim() === savedCard}>
+          Predeterminar
+        </Button>
+      </Space.Compact>
+      <Text type="secondary" className="ios-footnote">
+        {status?.servidor ? `${status.servidor} · ` : ''}
+        {savedCard ? `Predeterminada: #${savedCard}` : 'Guarda el número para no escribirlo cada vez'}
+      </Text>
+      <Space style={{ marginTop: 8 }} size={6} wrap>
+        <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
+        <Text style={{ fontSize: 13 }}>Actualizar cada</Text>
+        <InputNumber size="small" min={1} max={120} value={refreshMinutes} onChange={setRefreshMinutes} style={{ width: 60 }} />
+        <Text style={{ fontSize: 13 }}>min</Text>
+      </Space>
+      <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
+        <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
+          o subir un Excel/CSV
+        </Button>
+      </Upload>
+      {fetchInfo?.avisos.map((aviso) => (
+        <Alert key={aviso} type="warning" message={aviso} showIcon style={{ marginTop: 4, fontSize: 12 }} />
+      ))}
+
+      <div className="ios-field-label">Asignar a</div>
+      <Segmented
+        block
+        value={modo}
+        onChange={setModo}
+        options={[
+          { value: 'automatico', label: 'Automático' },
+          { value: 'inhouse', label: 'Técnicos' },
+          { value: 'contratistas', label: 'Contratistas' },
+        ]}
+      />
+      <div className="ios-field-label">Filtrar por OR</div>
+      <Select
+        mode="multiple"
+        allowClear
+        value={orFilter}
+        onChange={setOrFilter}
+        style={{ width: '100%' }}
+        placeholder="Todos los OR"
+        options={Object.entries(orCounts).map(([name, count]) => ({ value: name, label: `${name} (${count})` }))}
+      />
+
+      <div className="ios-field-label">Tránsito: más tiempo de desplazamiento</div>
+      <div className="ios-list">
+        {transito.map((z) => (
+          <div key={z.nombre} className="ios-row">
+            <div className="ios-row-main"><div className="ios-row-title">{z.nombre}</div></div>
+            <InputNumber
+              size="small"
+              min={0}
+              max={500}
+              value={z.recargo_pct}
+              onChange={(v) => updateTransito(z.nombre, 'recargo_pct', v)}
+              addonAfter="%"
+              style={{ width: 92 }}
+            />
+            <InputNumber
+              size="small"
+              min={0}
+              max={240}
+              value={z.minutos_extra}
+              onChange={(v) => updateTransito(z.nombre, 'minutos_extra', v)}
+              addonAfter="min"
+              style={{ width: 100 }}
+            />
+          </div>
+        ))}
+      </div>
+      <Text type="secondary" className="ios-footnote">
+        Se suma a cada desplazamiento que empieza o termina en la zona: un % del tiempo por las vías y, si quieres, minutos fijos.
+      </Text>
+
+      <div className="ios-field-label">Jornada</div>
+      <Form
+        form={form}
+        layout="vertical"
+        size="small"
+        initialValues={{
+          horario_inicio: dayjs('08:00', 'HH:mm'),
+          horas_laborales: 8,
+          velocidad_promedio_kmh: 30,
+          factor_vial: 1.3,
+          radio_inhouse_km: 40,
+          capacidad_maxima_actividades: null,
+          incluir_retorno: true,
+        }}
+      >
+        <Space wrap>
+          <Form.Item label="Inicio" name="horario_inicio" rules={[{ required: true }]}>
+            <TimePicker format="HH:mm" />
+          </Form.Item>
+          <Form.Item label="Horas de trabajo" name="horas_laborales" rules={[{ required: true }]}>
+            <InputNumber min={1} max={24} step={0.5} />
+          </Form.Item>
+          <Form.Item label="Máx. OTs por ruta" name="capacidad_maxima_actividades">
+            <InputNumber min={1} placeholder="Sin límite" />
+          </Form.Item>
+          <Form.Item label="Volver a la base" name="incluir_retorno" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Radio técnicos (km)"
+            name="radio_inhouse_km"
+            hidden={zonas.equipos.length > 0}
+            tooltip="Solo si no hay zonas por equipo: las OTs más lejos que esto de la base van a contratistas"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={500} />
+          </Form.Item>
+          <Form.Item
+            label="Velocidad en ciudad (km/h)"
+            name="velocidad_promedio_kmh"
+            tooltip="Solo si OSRM no responde: los tiempos se estiman en línea recta"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={5} max={120} />
+          </Form.Item>
+          <Form.Item
+            label="Factor vial"
+            name="factor_vial"
+            tooltip="Solo si OSRM no responde: aproxima la línea recta a la distancia por carretera"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={3} step={0.1} />
+          </Form.Item>
+        </Space>
+      </Form>
+    </>
+  );
+
+  return (
+    <>
       {status?.sinBackend && (
         <Alert
           type="error"
           showIcon
-          style={{ marginBottom: 12 }}
+          className="ios-alert"
           message="No hay conexión con el backend"
           description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
         />
@@ -269,248 +553,54 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
         <Alert
           type="warning"
           showIcon
-          style={{ marginBottom: 12 }}
+          className="ios-alert"
           message="Metabase no está configurado"
           description="Completa METABASE_URL y METABASE_API_KEY en backend/.env y reinicia con ./iniciar.sh."
         />
       )}
       {status?.configurado && !savedCard && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="Indica la pregunta de Metabase en Ajustes y pulsa Predeterminar"
-        />
+        <Alert type="info" showIcon className="ios-alert" message="Indica la pregunta de Metabase en Ajustes y pulsa Predeterminar" />
       )}
-
-      <Card
-        size="small"
-        title={`Disponibles el ${dayjs(dia).format('ddd D MMM')} (${disponibles.length})`}
-        style={{ marginBottom: 12 }}
-        extra={<Button size="small" type="link" icon={<SettingOutlined />} onClick={() => setTechModalOpen(true)}>Gestionar</Button>}
-      >
-        {tecnicosActivos.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {tecnicosActivos.map((t) => {
-              const available = disponibles.includes(t.id);
-              const partners = tecnicosActivos.filter((o) => o.id !== t.id && disponibles.includes(o.id)
-                && o.base_id === t.base_id && (!parejas[o.id] || parejas[o.id] === t.id));
-              return (
-                <div key={t.id} className="tech-row">
-                  <Checkbox
-                    checked={available}
-                    onChange={(e) => setNoDisponibles((prev) => (e.target.checked
-                      ? prev.filter((x) => x !== t.id) : [...prev, t.id]))}
-                  >
-                    <span className="tech-name">{t.nombre}</span>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {' '}· {sedesById[t.base_id]?.empresa || t.base_id}
-                      {t.costo_dia ? ` · ${formatCop(t.costo_dia)}/día` : ''}
-                    </Text>
-                  </Checkbox>
-                  {available && partners.length > 0 && (
-                    <Select
-                      size="small"
-                      allowClear
-                      placeholder="Pareja: auto"
-                      value={parejas[t.id]}
-                      onChange={(v) => setPareja(t.id, v)}
-                      options={partners.map((o) => ({ value: o.id, label: o.nombre }))}
-                      style={{ width: 120 }}
-                    />
-                  )}
-                </div>
-              );
-            })}
-            {disponibles.length > 1 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {cuadrillasManuales.length
-                  ? `${cuadrillasManuales.length} pareja(s) armadas a mano; con el resto se arman las que pidan las OTs de 2 personas.`
-                  : 'Las parejas para OTs de 2 personas se arman solas (o como ya salen en Metabase).'}
-              </Text>
-            )}
-          </div>
-        ) : (
-          <Text type="secondary">
-            Sin técnicos registrados: todo se recomendará a contratistas. Agrégalos en «Gestionar».
-          </Text>
-        )}
-        {tecnicosFaltantes.length > 0 && (
-          <Button size="small" type="dashed" block style={{ marginTop: 8 }} onClick={addSheetTechnicians}>
-            Agregar {tecnicosFaltantes.length} técnicos de la hoja ({tecnicosFaltantes.map((t) => t.nombre.split(' ')[0]).join(', ')})
-          </Button>
-        )}
-      </Card>
-
-      <Card
-        size="small"
-        title="Contratistas por OR"
-        style={{ marginBottom: 12 }}
-        extra={<Button size="small" type="link" onClick={() => setOrModalOpen(true)}>Editar</Button>}
-      >
-        {orRows.length ? orRows.map((r) => (
-          <div key={r.key} style={{ marginBottom: 8 }}>
-            <Text strong style={{ fontSize: 12 }}>{r.nombre} ({r.ots})</Text>
-            {r.departamentos.length > 0 && (
-              <Text type="secondary" style={{ fontSize: 11 }}> · {r.departamentos.join(', ')}</Text>
-            )}
-            <div>
-              {r.manual.length > 0 && r.manual.map((id) => <Tag key={id} color="purple">{empresasById[id]?.nombre || id}</Tag>)}
-              {!r.manual.length && r.auto.length > 0 && r.auto.map((id) => (
-                <Tag key={id} bordered={false}>{empresasById[id]?.nombre || id}</Tag>
-              ))}
-              {!r.manual.length && !r.auto.length && (
-                <Tag icon={<WarningOutlined />} color="warning">
-                  {r.desconocido ? 'los de su departamento' : 'sin contratistas en la zona: el más cercano'}
-                </Tag>
-              )}
-            </div>
-          </div>
-        )) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Cada OT va al contratista más cercano con sede en los departamentos que atiende su OR.
-          </Text>
-        )}
-      </Card>
-
-      {services.length > 0 && (
-        <Card
-          size="small"
-          title="Tipos de OT"
-          style={{ marginBottom: 12 }}
-          extra={<Button size="small" type="link" onClick={() => setTypesModalOpen(true)}>Editar</Button>}
-        >
-          {services.map((s) => {
-            const tipo = otTypeSettings(s, config.tipos_ot);
-            return (
-              <div key={s} className="ot-type-row">
-                <Text>{s} <Text type="secondary">({serviceCounts[s]})</Text></Text>
-                <span>
-                  <Tag>{tipo.minutos} min</Tag>
-                  <Tag color={tipo.personas > 1 ? 'blue' : undefined}>{tipo.personas} {tipo.personas > 1 ? 'personas' : 'persona'}</Tag>
-                </span>
-              </div>
-            );
-          })}
-        </Card>
+      {fetchInfo && (fetchInfo.geocodificadas > 0 || fetchInfo.sin_coordenadas > 0) && (
+        <Text type="secondary" className="ios-footnote" style={{ margin: '0 4px 10px' }}>
+          {fetchInfo.geocodificadas ? `${fetchInfo.geocodificadas} OTs ubicadas por dirección` : ''}
+          {fetchInfo.geocodificadas && fetchInfo.sin_coordenadas ? ' · ' : ''}
+          {fetchInfo.sin_coordenadas ? `${fetchInfo.sin_coordenadas} sin ubicación` : ''}
+        </Text>
       )}
 
       <Collapse
-        size="small"
-        style={{ marginBottom: 12 }}
-        activeKey={ajustesAbiertos}
-        onChange={setAjustesAbiertos}
-        items={[{
-          key: 'ajustes',
-          label: 'Ajustes',
-          forceRender: true,
-          children: (
-            <>
-              <Text strong style={{ fontSize: 12 }}>Pregunta de Metabase</Text>
-              <Space.Compact style={{ width: '100%', margin: '4px 0 0' }}>
-                <Input
-                  value={cardId}
-                  placeholder="Número de la pregunta"
-                  onChange={(e) => setCardId(e.target.value)}
-                  prefix={<Text type="secondary">#</Text>}
-                />
-                <Button icon={<SaveOutlined />} onClick={saveDefaultCard} disabled={!cardId.trim() || cardId.trim() === savedCard}>
-                  Predeterminar
-                </Button>
-              </Space.Compact>
-              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
-                {status?.servidor ? `${status.servidor} · ` : ''}
-                {savedCard ? `Predeterminada: #${savedCard}` : 'Guarda el número para no escribirlo cada vez'}
-              </Text>
-              <Space style={{ marginTop: 8 }} size={4} wrap>
-                <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
-                <Text style={{ fontSize: 12 }}>Extraer y recomendar cada</Text>
-                <InputNumber size="small" min={1} max={120} value={refreshMinutes} onChange={setRefreshMinutes} style={{ width: 64 }} />
-                <Text style={{ fontSize: 12 }}>min</Text>
-              </Space>
-              <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
-                <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
-                  o subir un Excel/CSV
-                </Button>
-              </Upload>
-              {fetchInfo?.avisos.map((aviso) => (
-                <Alert key={aviso} type="warning" message={aviso} showIcon style={{ marginTop: 4, fontSize: 12 }} />
-              ))}
-              <div style={{ marginBottom: 12 }} />
-              <Text strong style={{ fontSize: 12 }}>Asignar a</Text>
-              <Segmented
-                block
-                size="small"
-                value={modo}
-                onChange={setModo}
-                style={{ margin: '4px 0 12px' }}
-                options={[
-                  { value: 'automatico', label: 'Automático' },
-                  { value: 'inhouse', label: 'Solo técnicos' },
-                  { value: 'contratistas', label: 'Solo contratistas' },
-                ]}
-              />
-              <Text strong style={{ fontSize: 12 }}>Filtrar por OR</Text>
-              <Select
-                mode="multiple"
-                allowClear
-                value={orFilter}
-                onChange={setOrFilter}
-                style={{ width: '100%', margin: '4px 0 12px' }}
-                placeholder="Todos los OR"
-                options={Object.entries(orCounts).map(([name, count]) => ({ value: name, label: `${name} (${count})` }))}
-              />
-              <Form
-                form={form}
-                layout="vertical"
-                size="small"
-                initialValues={{
-                  horario_inicio: dayjs('08:00', 'HH:mm'),
-                  horas_laborales: 8,
-                  velocidad_promedio_kmh: 30,
-                  factor_vial: 1.3,
-                  radio_inhouse_km: 40,
-                  capacidad_maxima_actividades: null,
-                  incluir_retorno: true,
-                }}
-              >
-                <Space wrap>
-                  <Form.Item label="Inicio" name="horario_inicio" rules={[{ required: true }]}>
-                    <TimePicker format="HH:mm" />
-                  </Form.Item>
-                  <Form.Item label="Horas de trabajo" name="horas_laborales" rules={[{ required: true }]}>
-                    <InputNumber min={1} max={24} step={0.5} />
-                  </Form.Item>
-                  <Form.Item
-                    label="Radio técnicos (km)"
-                    name="radio_inhouse_km"
-                    tooltip="En modo automático, las OTs más lejos que esto de la base de los técnicos van a contratistas"
-                    rules={[{ required: true }]}
-                  >
-                    <InputNumber min={1} max={500} />
-                  </Form.Item>
-                  <Form.Item label="Velocidad (km/h)" name="velocidad_promedio_kmh" rules={[{ required: true }]}>
-                    <InputNumber min={5} max={120} />
-                  </Form.Item>
-                  <Form.Item
-                    label="Factor vial"
-                    name="factor_vial"
-                    tooltip="Las distancias son en línea recta; este factor las aproxima a distancia por carretera"
-                    rules={[{ required: true }]}
-                  >
-                    <InputNumber min={1} max={3} step={0.1} />
-                  </Form.Item>
-                  <Form.Item label="Máx. OTs por ruta" name="capacidad_maxima_actividades">
-                    <InputNumber min={1} placeholder="Sin límite" />
-                  </Form.Item>
-                  <Form.Item label="Volver a la base" name="incluir_retorno" valuePropName="checked">
-                    <Switch />
-                  </Form.Item>
-                </Space>
-              </Form>
-            </>
-          ),
-        }]}
+        className="ios-sections"
+        bordered={false}
+        expandIconPosition="end"
+        activeKey={abiertas}
+        onChange={setAbiertas}
+        items={[
+          {
+            key: 'tecnicos',
+            label: <SectionLabel icon={<TeamOutlined />} title="Técnicos" />,
+            extra: <Text type="secondary">{disponibles.length} de {tecnicosActivos.length} · {dayjs(dia).format('ddd D')}</Text>,
+            children: tecnicosSection,
+          },
+          {
+            key: 'contratistas',
+            label: <SectionLabel icon={<ShopOutlined />} title="Contratistas por OR" />,
+            extra: orRows.length ? <Text type="secondary">{orRows.length} OR</Text> : null,
+            children: contratistasSection,
+          },
+          {
+            key: 'tipos',
+            label: <SectionLabel icon={<ToolOutlined />} title="Tipos de OT" />,
+            extra: services.length ? <Text type="secondary">{services.length}</Text> : null,
+            children: tiposSection,
+          },
+          {
+            key: 'ajustes',
+            label: <SectionLabel icon={<SettingOutlined />} title="Ajustes" />,
+            forceRender: true,
+            children: ajustesSection,
+          },
+        ]}
       />
 
       <TechniciansModal
@@ -539,6 +629,6 @@ const AssignmentPanel = ({ ots, onOtsLoaded, onAssign, loading, config, onConfig
       />
     </>
   );
-};
+});
 
 export default AssignmentPanel;

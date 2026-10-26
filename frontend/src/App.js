@@ -1,22 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Layout, Typography, Space, Spin, message, Alert, Card, Empty, Button, DatePicker, Segmented, Tag,
+  Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tag, Tooltip,
 } from 'antd';
-import { LeftOutlined, RightOutlined, UndoOutlined } from '@ant-design/icons';
+import {
+  LeftOutlined, RightOutlined, UndoOutlined, ThunderboltFilled, ReloadOutlined, UnorderedListOutlined,
+  EnvironmentOutlined, NodeIndexOutlined, TableOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
 import OtsTable from './components/OtsTable';
-import { assignActivities, getCatalog } from './services/api';
+import { assignActivities, getCatalog, getZones } from './services/api';
 
 import './App.css';
 
-const { Header, Content, Sider, Footer } = Layout;
-const { Text } = Typography;
+const { Header, Content, Sider } = Layout;
 
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
 const ISO_DAY = 'YYYY-MM-DD';
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function App() {
   const [loading, setLoading] = useState(false);
@@ -30,15 +33,20 @@ function App() {
   const [assignedCodes, setAssignedCodes] = useState('');
   const [config, setConfig] = useState({ tecnicos: [], or_contratistas: {}, tipos_ot: {}, card_id: null });
   const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
+  const [zonas, setZonas] = useState({ equipos: [], transito: [] });
   const [dia, setDia] = useState(dayjs().format(ISO_DAY));
+  const [vista, setVista] = useState('lista');
   const [filtro, setFiltro] = useState('todas');
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
+  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false });
+  const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
   const baseRef = useRef(null);
 
   useEffect(() => {
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
+    getZones().then(setZonas).catch(() => {});
   }, []);
 
   const handleOtsLoaded = useCallback((loaded, nuevasSet, sourceLabel, mapeoUsado) => {
@@ -62,7 +70,7 @@ function App() {
       message.success({
         content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} OTs a técnicos, ${m.ots_con_contratistas} a contratistas`,
         key: 'assign',
-        duration: 5,
+        duration: 4,
       });
     } catch (error) {
       console.error('Assignment error:', error);
@@ -91,6 +99,7 @@ function App() {
     if (baseRef.current) handleAssign(baseRef.current, { fijas: {} });
   };
 
+  const busy = loading || panelState.fetching;
   const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
   const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
   const tecnicosEdicion = config.tecnicos
@@ -99,27 +108,45 @@ function App() {
   const decisiones = result?.decisiones || [];
   const cuenta = (situacion) => decisiones.filter((d) => d.situacion === situacion).length;
   const ediciones = Object.keys(fijas).length;
+  const hoy = dayjs().format(ISO_DAY);
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout className="app-shell">
       <Header className="ios-header">
         <div className="ios-header-inner">
           <Space size={12}>
             <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" className="app-icon" />
             <div>
               <div className="app-title">Ruteo</div>
-              <div className="app-subtitle">A quién enviar cada OT: técnicos in-house o contratistas</div>
+              <div className="app-subtitle">
+                {source && ots ? `${source} · ${ots.length} OTs` : 'Técnicos Bia o contratistas, OT por OT'}
+              </div>
             </div>
           </Space>
-          {source && ots && (
-            <Text type="secondary">{source} · {ots.length} OTs</Text>
-          )}
+          <Space size={8}>
+            {ots?.length > 0 && (
+              <Tooltip title="Recalcular con los ajustes actuales">
+                <Button shape="circle" size="large" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
+              </Tooltip>
+            )}
+            <Button
+              type="primary"
+              shape="round"
+              size="large"
+              icon={<ThunderboltFilled />}
+              loading={busy}
+              disabled={!panelState.canExtract}
+              onClick={() => panelRef.current?.extract()}
+            >
+              Extraer y recomendar
+            </Button>
+          </Space>
         </div>
       </Header>
 
       <Layout>
         <Sider
-          width={400}
+          width={380}
           className="ios-sider"
           style={{
             overflow: 'auto',
@@ -134,9 +161,10 @@ function App() {
           collapsedWidth={0}
           breakpoint="lg"
         >
-          {/* Bottom padding so the sider collapse trigger does not cover the last card */}
+          {/* Bottom padding so the sider collapse trigger does not cover the last section */}
           <div style={{ padding: 16, paddingBottom: 72 }}>
             <AssignmentPanel
+              ref={panelRef}
               ots={ots}
               onOtsLoaded={handleOtsLoaded}
               onAssign={handleAssign}
@@ -145,73 +173,100 @@ function App() {
               onConfigChange={setConfig}
               catalog={catalog}
               dia={dia}
+              zonas={zonas}
+              onStateChange={setPanelState}
             />
           </div>
         </Sider>
 
-        <Layout style={{ padding: '0 24px 24px' }}>
-          <Content style={{ margin: '24px 0', minHeight: 280 }}>
-            <Card size="small" className="day-bar" style={{ marginBottom: 16 }}>
-              <Space wrap size={12} style={{ width: '100%', justifyContent: 'space-between' }}>
-                <Space size={4}>
-                  <Button
-                    icon={<LeftOutlined />}
-                    disabled={loading}
-                    onClick={() => changeDay(dayjs(dia).subtract(1, 'day').format(ISO_DAY))}
-                  />
-                  <DatePicker
-                    value={dayjs(dia)}
-                    allowClear={false}
-                    disabled={loading}
-                    format="dddd D [de] MMMM YYYY"
-                    onChange={(d) => d && changeDay(d.format(ISO_DAY))}
-                    style={{ width: 240 }}
-                  />
-                  <Button
-                    icon={<RightOutlined />}
-                    disabled={loading}
-                    onClick={() => changeDay(dayjs(dia).add(1, 'day').format(ISO_DAY))}
-                  />
-                  {dia !== dayjs().format(ISO_DAY) && (
-                    <Button type="link" disabled={loading} onClick={() => changeDay(dayjs().format(ISO_DAY))}>Hoy</Button>
-                  )}
-                </Space>
+        <Layout className="main-pane">
+          <Content>
+            <div className="day-header">
+              <div>
+                <div className="eyebrow">{dia === hoy ? 'Plan de hoy' : 'Plan del día'}</div>
+                <div className="large-title">{capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
+              </div>
+              <Space size={6} className="day-nav">
+                <Button
+                  shape="circle"
+                  icon={<LeftOutlined />}
+                  disabled={busy}
+                  onClick={() => changeDay(dayjs(dia).subtract(1, 'day').format(ISO_DAY))}
+                />
+                <DatePicker
+                  value={dayjs(dia)}
+                  allowClear={false}
+                  disabled={busy}
+                  variant="filled"
+                  format="DD/MM/YYYY"
+                  onChange={(d) => d && changeDay(d.format(ISO_DAY))}
+                  style={{ width: 132 }}
+                />
+                <Button
+                  shape="circle"
+                  icon={<RightOutlined />}
+                  disabled={busy}
+                  onClick={() => changeDay(dayjs(dia).add(1, 'day').format(ISO_DAY))}
+                />
+                {dia !== hoy && (
+                  <Button shape="round" disabled={busy} onClick={() => changeDay(hoy)}>Hoy</Button>
+                )}
+              </Space>
+            </div>
+
+            <div className="toolbar">
+              <Segmented
+                value={vista}
+                onChange={setVista}
+                options={[
+                  { value: 'lista', label: 'Lista', icon: <UnorderedListOutlined /> },
+                  { value: 'mapa', label: 'Mapa', icon: <EnvironmentOutlined /> },
+                  { value: 'rutas', label: 'Rutas', icon: <NodeIndexOutlined /> },
+                  { value: 'ots', label: 'Metabase', icon: <TableOutlined /> },
+                ]}
+              />
+              {vista !== 'ots' && (
                 <Segmented
                   value={filtro}
                   onChange={setFiltro}
                   options={[
-                    { value: 'todas', label: `Todas${result ? ` (${decisiones.length})` : ''}` },
-                    { value: 'asignadas', label: `Ya asignadas${result ? ` (${cuenta('asignada')})` : ''}` },
-                    { value: 'pendientes', label: `Por asignar${result ? ` (${cuenta('pendiente')})` : ''}` },
+                    { value: 'todas', label: `Todas${result ? ` ${decisiones.length}` : ''}` },
+                    { value: 'asignadas', label: `Ya asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
+                    { value: 'pendientes', label: `Por asignar${result ? ` ${cuenta('pendiente')}` : ''}` },
                   ]}
                 />
-                {ediciones > 0 && (
-                  <Space size={4}>
-                    <Tag color="gold">{ediciones} editada{ediciones > 1 ? 's' : ''} a mano</Tag>
-                    <Button size="small" icon={<UndoOutlined />} disabled={loading} onClick={clearEdits}>Quitar ediciones</Button>
-                  </Space>
-                )}
-              </Space>
-              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 6 }}>
-                El plan del día toma las OTs ya asignadas en Metabase para esa fecha (se respetan si su técnico está
-                disponible) y sugiere a quién enviar las pendientes. Cambia «Enviar a» en la tabla para fijar otra opción.
-              </Text>
-            </Card>
-            <Spin spinning={loading} size="large" tip="Calculando el plan del día (puede tardar hasta un minuto)...">
+              )}
+              {ediciones > 0 && (
+                <Space size={4}>
+                  <Tag color="gold" bordered={false}>{ediciones} editada{ediciones > 1 ? 's' : ''}</Tag>
+                  <Button size="small" shape="round" icon={<UndoOutlined />} disabled={busy} onClick={clearEdits}>
+                    Quitar ediciones
+                  </Button>
+                </Space>
+              )}
+            </div>
+
+            <Spin spinning={loading} size="large" tip="Calculando el plan del día...">
               {stale && (
                 <Alert
                   type="info"
                   showIcon
-                  style={{ marginBottom: 16 }}
-                  message="Las OTs cambiaron desde la última recomendación. Pulsa Recalcular para actualizarla."
+                  className="ios-alert"
+                  message="Las OTs cambiaron desde la última recomendación. Pulsa recalcular (↻) para actualizarla."
                 />
               )}
-              {result && (
+              {vista === 'ots' && (
+                ots?.length ? (
+                  <OtsTable ots={ots} nuevas={nuevas} mapeo={mapeo} config={config} title={`Todas las OTs de la pregunta (${ots.length})`} />
+                ) : <EmptyState />
+              )}
+              {vista !== 'ots' && (result ? (
                 <AssignmentResults
                   result={result}
                   ots={ots}
                   nuevas={nuevas}
                   incluirRetorno={incluirRetorno}
+                  view={vista}
                   filtro={filtro}
                   fijas={fijas}
                   onEdit={handleEdit}
@@ -219,31 +274,24 @@ function App() {
                   empresas={catalog.empresas}
                   editing={loading}
                 />
-              )}
-              {!result && !ots?.length && (
-                <Card style={{ height: 420, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Empty description="Pulsa «Extraer y recomendar» para traer las OTs de Metabase y armar el plan del día" />
-                </Card>
-              )}
-              <OtsTable
-                ots={ots}
-                nuevas={nuevas}
-                mapeo={mapeo}
-                config={config}
-                title={`Todas las OTs de la pregunta (${ots?.length || 0}) con todas sus columnas`}
-              />
+              ) : <EmptyState />)}
             </Spin>
           </Content>
-
-          <Footer style={{ textAlign: 'center', background: 'transparent' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Ruteo · Google OR-Tools · OSRM · React · FastAPI
-            </Text>
-          </Footer>
         </Layout>
       </Layout>
     </Layout>
   );
 }
+
+const EmptyState = () => (
+  <div className="empty-state">
+    <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" />
+    <div className="empty-title">Sin plan todavía</div>
+    <div className="empty-text">
+      Pulsa «Extraer y recomendar» para traer las OTs de Metabase: las ya asignadas para este día se respetan y
+      la app sugiere a quién enviar las pendientes.
+    </div>
+  </div>
+);
 
 export default App;

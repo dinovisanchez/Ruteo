@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react';
 import {
-  Card, Row, Col, Statistic, Tag, Table, Collapse, Alert, Button, Space, Typography, Tooltip, Descriptions, Select,
+  Tag, Table, Collapse, Button, Space, Typography, Tooltip, Descriptions, Select,
 } from 'antd';
 import {
-  CheckCircleOutlined, CloseCircleOutlined, DownloadOutlined, EnvironmentOutlined, WarningOutlined, LockOutlined,
+  CheckCircleFilled, CloseCircleFilled, DownloadOutlined, EnvironmentOutlined, WarningFilled, LockOutlined,
 } from '@ant-design/icons';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
 import { formatExtra } from './OtsTable';
@@ -15,7 +15,7 @@ const km = (value) => (value ?? 0).toLocaleString('es-CO', { maximumFractionDigi
 const hhmm = (value) => (value ? value.slice(0, 5) : '');
 
 const DESTINO = {
-  tecnico: { label: 'Técnico in-house', color: 'blue' },
+  tecnico: { label: 'Técnico Bia', color: 'blue' },
   contratista: { label: 'Contratista', color: 'purple' },
   externo: { label: 'Externo', color: 'default' },
   sin_asignar: { label: 'Sin asignar', color: 'red' },
@@ -28,31 +28,44 @@ const matchesFilter = (decision, filtro) => (
 );
 
 const otCell = (actividad, codigo, nuevas) => (
-  <Space size={4}>
-    <Text strong>{codigo}</Text>
-    {nuevas?.has(codigo) && <Tag color="green">Nueva</Tag>}
-    {actividad?.coordenadas_aproximadas && (
-      <Tooltip title="Ubicación aproximada: geocodificada a partir de la dirección o el municipio">
-        <EnvironmentOutlined style={{ color: '#FF9500' }} />
-      </Tooltip>
-    )}
-  </Space>
+  <div className="ot-cell">
+    <Space size={4}>
+      <Text strong>{codigo}</Text>
+      {nuevas?.has(codigo) && <Tag color="green" bordered={false}>Nueva</Tag>}
+      {actividad?.coordenadas_aproximadas && (
+        <Tooltip title="Ubicación aproximada: geocodificada a partir de la dirección o el municipio">
+          <EnvironmentOutlined style={{ color: '#FF9500' }} />
+        </Tooltip>
+      )}
+    </Space>
+    <div className="ot-cell-sub">{[actividad?.servicio, actividad?.ciudad].filter(Boolean).join(' · ')}</div>
+  </div>
 );
 
 const situacionTag = (situacion, actividad) => (situacion === 'asignada'
   ? (
     <Tooltip title={[actividad?.asignado_a, actividad?.contratista_asignado].filter(Boolean).join(' · ') || null}>
-      <Tag color="green">Ya asignada</Tag>
+      <Tag color="green" bordered={false}>Ya asignada</Tag>
     </Tooltip>
   )
-  : <Tag color="orange">Por asignar</Tag>);
+  : <Tag color="orange" bordered={false}>Por asignar</Tag>);
 
-const ExtrasDetail = ({ actividad }) => {
-  const rows = Object.entries(actividad?.extras || {});
-  if (!rows.length) return <Text type="secondary">Sin columnas adicionales</Text>;
+const DetailRow = ({ row, alternativas }) => {
+  const { decision: d, actividad } = row;
+  const extras = Object.entries(actividad?.extras || {});
   return (
-    <Descriptions size="small" column={3} bordered>
-      {rows.map(([key, value]) => <Descriptions.Item key={key} label={key}>{formatExtra(value)}</Descriptions.Item>)}
+    <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }} bordered>
+      <Descriptions.Item label="OR">{actividad?.or_operador}</Descriptions.Item>
+      <Descriptions.Item label="Personas">{actividad?.personas_requeridas || 1}</Descriptions.Item>
+      <Descriptions.Item label="Sale de">{d.sede}</Descriptions.Item>
+      <Descriptions.Item label="Km a la base">
+        {d.distancia_base_km === null || d.distancia_base_km === undefined ? '' : km(d.distancia_base_km)}
+      </Descriptions.Item>
+      <Descriptions.Item label="Dirección">{actividad?.direccion}</Descriptions.Item>
+      <Descriptions.Item label="Otras opciones">
+        {alternativas.map((a) => `${a.empresa} (${a.ciudad}) · ${km(a.distancia_km)} km`).join(' / ') || '—'}
+      </Descriptions.Item>
+      {extras.map(([key, value]) => <Descriptions.Item key={key} label={key}>{formatExtra(value)}</Descriptions.Item>)}
     </Descriptions>
   );
 };
@@ -94,12 +107,11 @@ const stopColumns = (nuevas, situaciones) => [
   { title: '#', dataIndex: 'secuencia', width: 40 },
   { title: 'OT', render: (_, p) => otCell(p.actividad, p.actividad.codigo_bia, nuevas) },
   { title: 'Situación', render: (_, p) => situacionTag(situaciones[p.actividad.codigo_bia], p.actividad) },
-  { title: 'OR', render: (_, p) => p.actividad.or_operador },
-  { title: 'Tipo de OT', render: (_, p) => <Tag color="blue">{p.actividad.servicio}</Tag> },
   { title: 'Personas', width: 80, render: (_, p) => p.actividad.personas_requeridas },
-  { title: 'Dirección', render: (_, p) => `${p.actividad.direccion}${p.actividad.ciudad ? `, ${p.actividad.ciudad}` : ''}` },
+  { title: 'Dirección', render: (_, p) => p.actividad.direccion },
   { title: 'Llegada', dataIndex: 'hora_llegada_estimada', width: 80, render: hhmm },
   { title: 'Salida', dataIndex: 'hora_salida_estimada', width: 80, render: hhmm },
+  { title: 'Viaje', dataIndex: 'tiempo_desplazamiento_minutos', width: 80, render: (v) => `${v} min` },
   { title: 'Km', dataIndex: 'distancia_desde_anterior_km', width: 70, render: km },
 ];
 
@@ -131,8 +143,16 @@ const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
   },
 ];
 
+const Kpi = ({ title, value, color }) => (
+  <div className="kpi-tile">
+    <div className="kpi-title">{title}</div>
+    <div className="kpi-value" style={color ? { color } : undefined}>{value}</div>
+  </div>
+);
+
 const AssignmentResults = ({
-  result, ots, nuevas, incluirRetorno, filtro = 'todas', fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
+  result, ots, nuevas, incluirRetorno, view = 'lista', filtro = 'todas', fijas = {}, onEdit, tecnicos = [],
+  empresas = [], editing,
 }) => {
   const situaciones = useMemo(
     () => Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion])),
@@ -163,35 +183,37 @@ const AssignmentResults = ({
   }));
   const rows = allRows.filter((r) => matchesFilter(r.decision, filtro));
 
-  const stats = [
+  const kpis = [
     { title: 'OTs del día', value: result.total_actividades },
-    { title: 'Ya asignadas', value: metricas.ots_ya_asignadas ?? 0, color: '#34C759' },
-    { title: 'Por asignar', value: metricas.ots_pendientes ?? 0, color: '#FF9500' },
-    { title: 'A técnicos', value: metricas.ots_con_tecnicos, color: '#007AFF' },
-    { title: 'A contratistas', value: metricas.ots_con_contratistas, color: '#AF52DE' },
+    { title: 'Ya asignadas', value: metricas.ots_ya_asignadas ?? 0, color: '#248A3D' },
+    { title: 'Por asignar', value: metricas.ots_pendientes ?? 0, color: '#C93400' },
+    { title: 'Técnicos Bia', value: metricas.ots_con_tecnicos, color: '#007AFF' },
+    { title: 'Contratistas', value: metricas.ots_con_contratistas, color: '#AF52DE' },
   ];
-  if (metricas.ots_externas) stats.push({ title: 'Externas', value: metricas.ots_externas });
-  stats.push(
-    { title: 'Sin asignar', value: metricas.ots_sin_asignar, color: metricas.ots_sin_asignar ? '#FF3B30' : undefined },
-    { title: 'Km totales', value: km(result.distancia_total_km) },
-  );
+  if (metricas.ots_externas) kpis.push({ title: 'Externas', value: metricas.ots_externas });
+  if (metricas.ots_sin_asignar) kpis.push({ title: 'Sin asignar', value: metricas.ots_sin_asignar, color: '#FF3B30' });
+  kpis.push({ title: 'Km', value: km(result.distancia_total_km) });
   if (metricas.costo_total !== null && metricas.costo_total !== undefined) {
-    stats.push({ title: 'Costo técnicos (día)', value: formatCop(metricas.costo_total) });
+    kpis.push({ title: 'Costo técnicos', value: formatCop(metricas.costo_total) });
   }
+  const transito = (metricas.transito || []).filter((z) => z.recargo_pct || z.minutos_extra)
+    .map((z) => `${z.nombre} +${z.recargo_pct}%${z.minutos_extra ? ` +${z.minutos_extra} min` : ''}`).join(', ');
 
-  // The decision and its reason go first so they are visible without scrolling
   const columns = [
     {
       title: 'OT',
       fixed: 'left',
+      width: 200,
       render: (_, r) => otCell(r.actividad, r.decision.codigo_bia, nuevas),
     },
     {
       title: 'Situación',
+      width: 110,
       render: (_, r) => situacionTag(r.decision.situacion, r.actividad),
     },
     {
       title: 'Enviar a',
+      width: 250,
       filters: Object.entries(DESTINO).map(([value, { label }]) => ({ text: label, value })),
       onFilter: (value, r) => r.decision.enviar_a === value,
       sorter: (a, b) => (a.decision.responsable || '~').localeCompare(b.decision.responsable || '~'),
@@ -202,17 +224,17 @@ const AssignmentResults = ({
           .filter((a) => a?.empresa_id)
           .map((a) => ({ id: a.empresa_id, nombre: `${a.empresa} (${a.ciudad})`, km: a.distancia_km }));
         return (
-          <Space direction="vertical" size={2} style={{ minWidth: 210 }}>
+          <div>
             <Space size={4} wrap>
-              <Tag color={DESTINO[d.enviar_a].color}>{DESTINO[d.enviar_a].label}</Tag>
+              <Tag color={DESTINO[d.enviar_a].color} bordered={false}>{DESTINO[d.enviar_a].label}</Tag>
               {d.fijada && !editada && (
                 <Tooltip title="Se respeta la asignación de Metabase">
                   <LockOutlined style={{ color: '#8E8E93' }} />
                 </Tooltip>
               )}
-              {editada && <Tag color="gold">Editada</Tag>}
+              {editada && <Tag color="gold" bordered={false}>Editada</Tag>}
             </Space>
-            {d.responsable && <Text strong>{d.responsable}</Text>}
+            {d.responsable && <div className="responsable">{d.responsable}</div>}
             {onEdit && (
               <Select
                 size="small"
@@ -226,42 +248,22 @@ const AssignmentResults = ({
                 onChange={(value) => onEdit(d.codigo_bia, value, d.situacion)}
                 options={editOptions(tecnicos, empresas, alternativas, d.situacion === 'asignada')}
                 popupMatchSelectWidth={false}
-                style={{ width: 210 }}
+                style={{ width: 220, marginTop: 4 }}
               />
             )}
-          </Space>
+          </div>
         );
       },
     },
     {
+      title: 'Llegada',
+      width: 80,
+      sorter: (a, b) => (a.decision.hora_llegada || '~').localeCompare(b.decision.hora_llegada || '~'),
+      render: (_, r) => <Text strong>{hhmm(r.decision.hora_llegada)}</Text>,
+    },
+    {
       title: 'Por qué',
-      width: 340,
-      render: (_, r) => <Text style={{ fontSize: 12 }}>{r.decision.motivo}</Text>,
-    },
-    { title: 'Tipo de OT', render: (_, r) => r.actividad?.servicio },
-    {
-      title: 'Personas',
-      align: 'center',
-      render: (_, r) => {
-        const personas = r.actividad?.personas_requeridas || 1;
-        return <Tag color={personas > 1 ? 'blue' : undefined}>{personas}</Tag>;
-      },
-    },
-    { title: 'Llegada', render: (_, r) => hhmm(r.decision.hora_llegada) },
-    { title: 'OR', render: (_, r) => r.actividad?.or_operador },
-    { title: 'Ciudad', render: (_, r) => r.actividad?.ciudad },
-    { title: 'Sale de', render: (_, r) => r.decision.sede },
-    {
-      title: 'Km a la base',
-      align: 'right',
-      render: (_, r) => (r.decision.distancia_base_km === null || r.decision.distancia_base_km === undefined
-        ? '' : km(r.decision.distancia_base_km)),
-    },
-    {
-      title: 'Otras opciones',
-      render: (_, r) => (recomendaciones[r.decision.codigo_bia]?.alternativas || []).map((a) => (
-        <div key={a.sede_id} style={{ fontSize: 12 }}>{a.empresa} ({a.ciudad}) · {km(a.distancia_km)} km</div>
-      )),
+      render: (_, r) => <Text type="secondary" className="motivo">{r.decision.motivo}</Text>,
     },
   ];
 
@@ -271,88 +273,87 @@ const AssignmentResults = ({
 
   return (
     <>
-      <Card
-        title="Recomendación"
-        style={{ marginBottom: 16 }}
-        extra={(
-          <Space wrap>
-            {result.viable_en_un_dia && <Tag icon={<CheckCircleOutlined />} color="success">Todo cabe en la jornada</Tag>}
-            {metricas.rutas_no_viables > 0 && (
-              <Tag icon={<CloseCircleOutlined />} color="error">{metricas.rutas_no_viables} rutas superan la jornada</Tag>
-            )}
-            <Button icon={<DownloadOutlined />} onClick={() => exportCsv(allRows, metricas.dia)}>Descargar CSV</Button>
-          </Space>
-        )}
-      >
-        <Row gutter={[16, 16]}>
-          {stats.map((s) => (
-            <Col key={s.title} flex="1 1 110px">
-              <Statistic title={s.title} value={s.value} valueStyle={s.color ? { color: s.color } : undefined} />
-            </Col>
-          ))}
-        </Row>
-        {metricas.parejas > 0 && (
-          <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-            {metricas.parejas} pareja(s) de técnicos para OTs de 2 personas
-            {metricas.cuadrillas_manuales ? ' (incluye las armadas a mano o que ya salen juntas en Metabase)' : ''}.
-          </Text>
-        )}
-        {(metricas.ots_otros_dias > 0 || metricas.asignadas_sin_fecha > 0) && (
-          <Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-            {metricas.ots_otros_dias > 0 && `${metricas.ots_otros_dias} OTs asignadas para otros días no entran en este plan. `}
-            {metricas.asignadas_sin_fecha > 0 && `${metricas.asignadas_sin_fecha} OTs asignadas no tienen fecha de visita en Metabase.`}
-          </Text>
-        )}
-        {metricas.ots_sin_lista_or > 0 && (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="warning"
-            showIcon
-            icon={<WarningOutlined />}
-            message={`${metricas.ots_sin_lista_or} OTs son de OR sin contratistas con sede en su zona: se eligió el más cercano de todos. Revisa «Contratistas por OR».`}
-          />
-        )}
-        <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          Tiempos estimados con línea recta × factor vial {metricas.factor_vial}; el mapa traza cada ruta por las vías
-          {metricas.radio_inhouse_km ? ` · técnicos atienden hasta ${metricas.radio_inhouse_km} km de su base` : ''}.
-        </Text>
-      </Card>
-
-      <Card title={`¿A quién enviar cada OT? (${rows.length})`} style={{ marginBottom: 16 }}>
-        <Table
-          size="small"
-          columns={columns}
-          dataSource={rows}
-          scroll={{ x: 'max-content' }}
-          pagination={{ pageSize: 25, hideOnSinglePage: true, showSizeChanger: false }}
-          expandable={{ expandedRowRender: (r) => <ExtrasDetail actividad={r.actividad} /> }}
-        />
-      </Card>
-
-      <div style={{ marginBottom: 16, height: 520 }}>
-        <AssignmentMapView result={result} incluirRetorno={incluirRetorno} visibles={visibles} situaciones={situaciones} />
+      <div className="kpi-grid">
+        {kpis.map((k) => <Kpi key={k.title} {...k} />)}
       </div>
 
-      <Card title={`Rutas (${rutasVisibles.length})`} style={{ marginBottom: 16 }}>
+      <div className="status-row">
+        {result.viable_en_un_dia
+          ? <span className="status-chip ok"><CheckCircleFilled /> Todo cabe en la jornada</span>
+          : metricas.rutas_no_viables > 0 && (
+            <span className="status-chip bad"><CloseCircleFilled /> {metricas.rutas_no_viables} rutas superan la jornada</span>
+          )}
+        <span className={`status-chip${metricas.tiempos_por_vias ? '' : ' warn'}`}>
+          {metricas.tiempos_por_vias ? 'Tiempos por las vías (OSRM)' : (metricas.aviso_vias || 'Tiempos estimados en línea recta')}
+          {transito ? ` · tránsito ${transito}` : ''}
+        </span>
+        {metricas.parejas > 0 && <span className="status-chip">{metricas.parejas} pareja(s) para OTs de 2 personas</span>}
+        {metricas.ots_otros_dias > 0 && <span className="status-chip">{metricas.ots_otros_dias} asignadas para otros días</span>}
+        {metricas.asignadas_sin_fecha > 0 && (
+          <span className="status-chip warn">{metricas.asignadas_sin_fecha} asignadas sin fecha en Metabase</span>
+        )}
+        {metricas.ots_sin_lista_or > 0 && (
+          <span className="status-chip warn">
+            <WarningFilled /> {metricas.ots_sin_lista_or} OTs de OR sin contratistas en su zona
+          </span>
+        )}
+        <Button size="small" shape="round" icon={<DownloadOutlined />} onClick={() => exportCsv(allRows, metricas.dia)}>
+          CSV
+        </Button>
+      </div>
+
+      {view === 'lista' && (
+        <div className="glass-panel">
+          <Table
+            size="middle"
+            columns={columns}
+            dataSource={rows}
+            // Minimum width: "Por qué" takes the rest of the row and wraps instead of overflowing
+            scroll={{ x: 980 }}
+            pagination={{ pageSize: 25, hideOnSinglePage: true, showSizeChanger: false }}
+            expandable={{
+              expandedRowRender: (r) => (
+                <DetailRow row={r} alternativas={recomendaciones[r.decision.codigo_bia]?.alternativas || []} />
+              ),
+            }}
+          />
+        </div>
+      )}
+
+      {view === 'mapa' && (
+        <div className="map-panel">
+          <AssignmentMapView result={result} incluirRetorno={incluirRetorno} visibles={visibles} situaciones={situaciones} />
+        </div>
+      )}
+
+      {view === 'rutas' && (
         <Collapse
+          className="routes-list"
+          bordered={false}
           items={rutasVisibles.map(({ r, idx }) => {
             const yaAsignadas = r.ruta.paradas.filter((p) => situaciones[p.actividad.codigo_bia] === 'asignada').length;
             return {
               key: r.responsable_id,
               label: (
-                <Space wrap>
-                  <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: 6, background: ROUTE_COLORS[idx % ROUTE_COLORS.length] }} />
-                  <Text strong>{r.responsable}</Text>
-                  <Text type="secondary">desde {r.sede.empresa} ({r.sede.ciudad})</Text>
-                  <Tag color={r.tipo === 'tecnico' ? 'blue' : 'purple'}>{r.tipo === 'tecnico' ? 'In-house' : 'Contratista'}</Tag>
-                  <Tag>{r.ruta.paradas.length} OTs</Tag>
-                  {yaAsignadas > 0 && <Tag color="green">{yaAsignadas} ya asignadas</Tag>}
-                  <Tag color={r.personas > 1 ? 'blue' : undefined}>{r.personas} {r.personas > 1 ? 'personas' : 'persona'}</Tag>
-                  {r.costo !== null && r.costo !== undefined && <Tag color="gold">{formatCop(r.costo)}/día</Tag>}
-                  <Tag>{km(r.ruta.distancia_total_km)} km</Tag>
-                  <Tag>{hhmm(r.ruta.hora_inicio)}–{hhmm(r.ruta.hora_fin)}</Tag>
-                  {r.ruta.viable ? <Tag color="success">Cabe en la jornada</Tag> : <Tag color="error">Supera la jornada</Tag>}
-                </Space>
+                <div className="route-head">
+                  <span className="route-dot" style={{ background: ROUTE_COLORS[idx % ROUTE_COLORS.length] }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="route-title">{r.responsable}</div>
+                    <div className="route-sub">
+                      {r.tipo === 'tecnico' ? 'Técnico Bia' : 'Contratista'} · sale de {r.sede.empresa} ({r.sede.ciudad})
+                      {' · '}{hhmm(r.ruta.hora_inicio)}–{hhmm(r.ruta.hora_fin)} · {km(r.ruta.distancia_total_km)} km
+                      {r.costo !== null && r.costo !== undefined ? ` · ${formatCop(r.costo)}/día` : ''}
+                    </div>
+                  </div>
+                  <Space size={4} wrap>
+                    <Tag bordered={false}>{r.ruta.paradas.length} OTs</Tag>
+                    {yaAsignadas > 0 && <Tag color="green" bordered={false}>{yaAsignadas} ya asignadas</Tag>}
+                    {r.personas > 1 && <Tag color="blue" bordered={false}>{r.personas} personas</Tag>}
+                    {r.ruta.viable
+                      ? <Tag color="success" bordered={false}>Cabe en la jornada</Tag>
+                      : <Tag color="error" bordered={false}>Supera la jornada</Tag>}
+                  </Space>
+                </div>
               ),
               children: (
                 <Table
@@ -361,13 +362,13 @@ const AssignmentResults = ({
                   pagination={false}
                   columns={stopColumns(nuevas, situaciones)}
                   dataSource={r.ruta.paradas}
-                  expandable={{ expandedRowRender: (p) => <ExtrasDetail actividad={p.actividad} /> }}
+                  scroll={{ x: 'max-content' }}
                 />
               ),
             };
           })}
         />
-      </Card>
+      )}
     </>
   );
 };

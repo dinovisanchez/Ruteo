@@ -294,7 +294,7 @@ BIA003,instalacion,"4.6200,-74.0900",Cliente 3,Carrera 789 #12-34,Bogotá,Cundin
 
 ## 🚀 Uso de la Aplicación
 
-Ruteo es una sola pantalla: pulsa **Extraer y recomendar** y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué.
+Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige el día y la vista (*Lista*, *Mapa*, *Rutas* o *Metabase* con todas las columnas de la pregunta). A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*.
 
 ### Plan del día
 
@@ -307,11 +307,33 @@ Ruteo es una sola pantalla: pulsa **Extraer y recomendar** y la app trae las OTs
 
 ### Cómo decide (modo automático)
 
-1. **Técnicos in-house primero.** Las OTs a menos de *Radio técnicos* (40 km por defecto) de la base de algún técnico disponible se reparten entre los técnicos disponibles ese día, cada uno saliendo de su base y sin pasar de las **horas de trabajo** (8 por defecto, incluyendo desplazamientos y el regreso a la base). La carga se reparte de forma pareja.
-2. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base (respetando las que ya salen juntas en Metabase), o puedes fijarlas con el selector *Pareja*.
-3. **Contratistas para el resto.** Las OTs lejos de las bases, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que pueden atender su OR**, en este orden: la lista que fijes a mano en *Contratistas por OR*; si no hay, los contratistas con sede en los **departamentos donde opera el OR** (catálogo `backend/data/operadores_red.csv`, que reconoce variantes como "ENEL COLOMBIA S.A. E.S.P." o "Codensa"); si el OR no está en el catálogo, los del departamento de la OT; y si nadie tiene sede en la zona, el más cercano de todos. Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
+1. **Equipos Bia primero, según su zona.** Cada equipo atiende ciertos OR en ciertas zonas (`backend/data/zonas_bia.json`):
+   - **Equipo Bia Costa** (base Barranquilla): Air-e y Afinia en Barranquilla y alrededores, Santa Marta, Ciénaga, y Cartagena y alrededores.
+   - **Equipo Bia Bogotá**: todo lo que cubre Enel (Bogotá y Cundinamarca).
 
-El resultado muestra la tabla **¿A quién enviar cada OT?** (responsable, de dónde sale, distancia, hora de llegada, motivo y otras opciones), el mapa, las rutas de cada técnico o cuadrilla con su costo, y todas las columnas de la pregunta. Todo se descarga en CSV. En *Ajustes* se puede cambiar a *Solo técnicos* o *Solo contratistas*, filtrar por OR y ajustar la jornada.
+   Una OT entra en una zona si su municipio está en la lista de la zona o si cae dentro de su radio. Las OTs de la zona de un equipo con técnicos disponibles se reparten entre ellos, cada uno saliendo de su base y sin pasar de las **horas de trabajo** (8 por defecto, incluyendo desplazamientos y el regreso a la base). La carga se reparte de forma pareja. Si no hay zonas definidas, vale la regla anterior: las OTs a menos de *Radio técnicos* de una base.
+2. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base (respetando las que ya salen juntas en Metabase), o puedes fijarlas con el selector *Pareja*.
+3. **Contratistas para el resto.** Las OTs fuera de la zona de los equipos Bia, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que pueden atender su OR**, en este orden: la lista que fijes a mano en *Contratistas por OR*; si no hay, los contratistas con sede en los **departamentos donde opera el OR** (catálogo `backend/data/operadores_red.csv`, que reconoce variantes como "ENEL COLOMBIA S.A. E.S.P." o "Codensa"); si el OR no está en el catálogo, los del departamento de la OT; y si nadie tiene sede en la zona, el más cercano de todos. Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
+
+El resultado muestra la lista de OTs con a quién enviarlas, la hora de llegada y el motivo (al desplegar una fila: OR, personas, de dónde sale, otras opciones y todas sus columnas), el mapa, las rutas de cada técnico o cuadrilla con su costo, y todas las columnas de la pregunta. Todo se descarga en CSV. En *Ajustes* se puede cambiar a *Solo técnicos* o *Solo contratistas*, filtrar por OR y ajustar la jornada y el tránsito.
+
+### Tiempos de desplazamiento y de cada visita
+
+- **Por las vías.** El tiempo entre dos puntos es el de la ruta por carretera según OSRM (una consulta de tabla por plan, guardada en memoria). Si OSRM no responde, se estima con la línea recta × *factor vial*: los primeros 15 km a la velocidad en ciudad y el resto a 60 km/h.
+- **Tránsito.** A cada desplazamiento que empieza o termina en estas zonas se le suma un porcentaje: **Bogotá +20 %**, **Barranquilla +15 %**, **Cartagena +10 %**. Se cambian en *Ajustes → Tránsito*, donde también se pueden sumar minutos fijos por desplazamiento.
+- **Duración de cada visita** (promedios; se ajustan en *Tipos de OT*):
+
+  | Tipo de OT | Duración |
+  |---|---|
+  | Visita previa (VIPE) | 1 h |
+  | Instalación directa | 2 h |
+  | Instalación semidirecta | 4 h |
+  | Instalación indirecta | 6 h |
+  | Normalización (cualquiera) | 2 h |
+  | Normalización Telemedidas | 1 h |
+  | Toma de lectura | 20 min |
+
+  Las instalaciones se separan por el *Tipo de medida* de la pregunta (DIRECT, SEMI_DIRECT, INDIRECT); sin ese dato cuentan como directas.
 
 ### Configuración
 
@@ -358,13 +380,15 @@ ORDER BY fecha_visita NULLS LAST, card_id;
 
 **3. Técnicos, contratistas por OR y tipos de OT** — se editan desde la app y se guardan en `backend/data/asignacion.json`: técnicos con base (por defecto Bia Bogotá) y **costo por día**; contratistas que atienden cada OR; minutos y **personas** de cada tipo de OT. Los técnicos de la pestaña *Tecnicos* de la hoja están en `backend/data/tecnicos.csv` (base *Costa* = Bia Barranquilla, *Bogota* = Bia Bogotá): se cargan solos la primera vez y, si faltan, con el botón *Agregar técnicos de la hoja*.
 
-**4. Operadores de Red** — `backend/data/operadores_red.csv` lista los OR de Colombia, los nombres con que pueden aparecer y los departamentos que atienden. Es una versión inicial: revísala y ajústala si algún OR atiende otros departamentos.
+**4. Zonas de los equipos Bia y del tránsito** — `backend/data/zonas_bia.json`: qué OR y zonas (centro, radio y municipios) atiende cada equipo, y el recargo de tránsito de cada zona. Edítalo y reinicia con `./iniciar.sh`.
+
+**5. Operadores de Red** — `backend/data/operadores_red.csv` lista los OR de Colombia, los nombres con que pueden aparecer y los departamentos que atienden. Es una versión inicial: revísala y ajústala si algún OR atiende otros departamentos.
 
 Con *Extraer y recomendar cada N min* la app vuelve a traer la pregunta sola y marca las OTs nuevas como **Nueva**.
 
 > Para decidir y estimar horarios, las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*); el mapa sí dibuja la ruta por las vías.
 
-Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia` y `fijas`), `POST /api/rutas/trazado`.
+Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/rutas/trazado`, `GET /api/zonas`.
 
 ---
 

@@ -92,6 +92,8 @@ class WorkConfiguration(BaseModel):
     horario_fin: time = Field(default=time(17, 0))
     horas_laborales: float = Field(default=8.0, gt=0, le=24)
     velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
+    # Sin OSRM: los km de un desplazamiento que pasan de los primeros 15 se recorren a esta velocidad
+    velocidad_carretera_kmh: float = Field(default=60.0, gt=0)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     punto_partida: GPSCoordinates
     incluir_retorno: bool = True
@@ -459,18 +461,56 @@ class AsignacionConfig(BaseModel):
     card_id: Optional[str] = None
 
 
+class Zona(BaseModel):
+    """Zona circular alrededor de un punto; con `municipios`, también entran las OTs de esos municipios"""
+    nombre: str
+    latitud: float
+    longitud: float
+    radio_km: float = Field(gt=0)
+    municipios: List[str] = Field(default_factory=list)
+    departamento: Optional[str] = None  # Para no confundir municipios con el mismo nombre
+
+
+class ZonaTransito(BaseModel):
+    """Zona con tránsito pesado: los desplazamientos que empiezan o terminan en ella tardan más"""
+    nombre: str
+    latitud: float
+    longitud: float
+    radio_km: float = Field(gt=0)
+    recargo_pct: float = Field(default=0, ge=0, le=500)  # % más sobre el tiempo de desplazamiento
+    minutos_extra: float = Field(default=0, ge=0, le=240)  # Minutos más por cada desplazamiento
+
+
+class CoberturaEquipo(BaseModel):
+    """OTs que atiende un equipo de técnicos Bia: las de esos OR dentro de esas zonas"""
+    base_id: str
+    equipo: str
+    ors: List[str]
+    zonas: List[Zona] = Field(default_factory=list)  # Vacía = toda el área que atiende el OR
+
+
+class MatrizVial(BaseModel):
+    """Distancia (km) y tiempo (min) por las vías entre cada par de puntos; None si no hay ruta"""
+    puntos: List[List[float]]  # [[lat, lon], ...]
+    km: List[List[Optional[float]]]
+    minutos: List[List[Optional[float]]]
+
+
 class JornadaConfig(BaseModel):
     """Jornada de trabajo; el punto de partida sale de la base de cada responsable"""
     horario_inicio: time = Field(default=time(8, 0))
     horas_laborales: float = Field(default=8.0, gt=0, le=24)
     velocidad_promedio_kmh: float = Field(default=30.0, gt=0)
+    # Sin OSRM: los km de un desplazamiento que pasan de los primeros 15 se recorren a esta velocidad
+    velocidad_carretera_kmh: float = Field(default=60.0, gt=0)
     # Las distancias son en línea recta; este factor las aproxima a distancia por vía
     factor_vial: float = Field(default=1.3, ge=1.0, le=3.0)
-    # En modo automático, las OTs más lejos que esto de toda base Bia van a contratistas
+    # Sin coberturas por equipo: en modo automático, las OTs más lejos que esto de toda base Bia van a contratistas
     radio_inhouse_km: float = Field(default=40.0, gt=0)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     incluir_retorno: bool = True
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
+    zonas_transito: List[ZonaTransito] = Field(default_factory=list)
 
 
 ModoAsignacion = Literal["automatico", "inhouse", "contratistas"]
@@ -493,6 +533,10 @@ class AssignmentRequest(BaseModel):
     externas: Dict[str, str] = Field(default_factory=dict)
     # OT → texto que antecede al motivo de la decisión (ej. por qué se reasignó)
     notas: Dict[str, str] = Field(default_factory=dict)
+    # Qué OTs atiende cada equipo Bia en modo automático; vacío = las que estén en el radio de una base
+    coberturas: List[CoberturaEquipo] = Field(default_factory=list)
+    # Tiempos por las vías (OSRM); sin matriz, línea recta × factor vial a la velocidad promedio
+    matriz: Optional[MatrizVial] = None
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
