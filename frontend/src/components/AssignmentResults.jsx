@@ -179,7 +179,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 
 const AssignmentResults = ({
   result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
-  onFiltrar, horasDia = 8.4,
+  onFiltrar, horasDia = 8.4, porAsignar = null,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
@@ -238,7 +238,25 @@ const AssignmentResults = ({
       onClick: () => onFiltrar({ estado: 'todas', destino: null }),
     },
     { title: 'Asignadas', value: c.asignada, color: '#248A3D', active: estado === 'asignadas', onClick: porEstado('asignadas') },
-    { title: 'Por asignar', value: c.pendiente, color: '#C93400', active: estado === 'pendientes', onClick: porEstado('pendientes') },
+    {
+      title: 'Por asignar',
+      value: c.pendiente,
+      color: '#C93400',
+      active: estado === 'pendientes',
+      onClick: porEstado('pendientes'),
+      // Without a person or search selected: everything still pending in Metabase, of any date
+      // (non-breaking spaces: when it wraps, it wraps between the two parts)
+      sub: porAsignar ? `${porAsignar.total}\u00a0en\u00a0total${porAsignar.vencidas
+        ? ` · ${porAsignar.vencidas}\u00a0${porAsignar.vencidas > 1 ? 'vencidas' : 'vencida'}` : ''}` : null,
+      hint: porAsignar ? [
+        `Pendientes del día: ${c.pendiente}`,
+        `Pendientes en total: ${porAsignar.total}`,
+        `· vencidas: ${porAsignar.vencidas}`,
+        `· para hoy: ${porAsignar.hoy}`,
+        `· próximos días: ${porAsignar.proximas}`,
+        `· sin fecha: ${porAsignar.sinFecha}`,
+      ].join('\n') : null,
+    },
     { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
     { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
     metricas.ots_externas
@@ -328,6 +346,7 @@ const AssignmentResults = ({
           >
             <span className="kpi-title">{t.title}</span>
             <span className="kpi-value" style={t.color ? { color: t.color } : undefined}>{t.value}</span>
+            {t.sub && <span className="kpi-sub">{t.sub}</span>}
           </button>
         ))}
       </div>

@@ -72,6 +72,25 @@ const matchesAssignee = (decision, values) => !values.length || values.some((val
   return decision.enviar_a === 'externo' && decision.responsable === nombre;
 });
 
+/**
+ * Today's date. It is checked every minute and when coming back to the tab, so it changes by
+ * itself at midnight and when the computer wakes up on another day.
+ */
+const useHoy = () => {
+  const [hoy, setHoy] = useState(() => dayjs().format(ISO_DAY));
+  useEffect(() => {
+    const revisar = () => setHoy(dayjs().format(ISO_DAY));
+    const alVolver = () => { if (document.visibilityState === 'visible') revisar(); };
+    const id = setInterval(revisar, 60 * 1000);
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, []);
+  return hoy;
+};
+
 function App() {
   const [loading, setLoading] = useState(false);
   const [siderCollapsed, setSiderCollapsed] = useState(false);
@@ -85,7 +104,8 @@ function App() {
   const [config, setConfig] = useState({ tecnicos: [], or_contratistas: {}, tipos_ot: {}, card_id: null });
   const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
   const [zonas, setZonas] = useState({ equipos: [], transito: [] });
-  const [dia, setDia] = useState(dayjs().format(ISO_DAY));
+  const hoy = useHoy();
+  const [dia, setDia] = useState(hoy);
   const [vista, setVista] = useState('lista');
   // Filters: name search, status and who it is assigned to (the date is the plan day)
   const [busqueda, setBusqueda] = useState('');
@@ -99,7 +119,7 @@ function App() {
   const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
-  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false });
+  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false, autoRefresh: false });
   const [actualizado, setActualizado] = useState(null);
   const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
@@ -125,7 +145,7 @@ function App() {
     // (the history used for utilization stays in the browser)
     const request = {
       ...base,
-      actividades: base.actividades.filter((a) => entraEnElDia(a, diaPlan, dayjs().format(ISO_DAY))),
+      actividades: base.actividades.filter((a) => entraEnElDia(a, diaPlan, hoy)),
       dia: diaPlan,
       fijas: overrides.fijas ?? fijas,
     };
@@ -184,7 +204,27 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [dia, fijas, catalog, capacidad]);
+  }, [dia, hoy, fijas, catalog, capacidad]);
+
+  // A new day started: whoever was looking at today moves to the new today, and the plan is redone
+  // (with fresh OTs from Metabase if the automatic update is on): overdue pending OTs move to today
+  const hoyAnteriorRef = useRef(hoy);
+  const [diasNuevos, setDiasNuevos] = useState(0);
+  useEffect(() => {
+    const anterior = hoyAnteriorRef.current;
+    if (anterior === hoy) return;
+    hoyAnteriorRef.current = hoy;
+    setDia((actual) => (actual === anterior ? hoy : actual));
+    setDiasNuevos((n) => n + 1);
+  }, [hoy]);
+  const nuevoDiaRef = useRef(null);
+  nuevoDiaRef.current = () => {
+    if (panelState.canExtract && panelState.autoRefresh) panelRef.current?.refresh();
+    else if (baseRef.current) handleAssign(baseRef.current);
+  };
+  useEffect(() => {
+    if (diasNuevos) nuevoDiaRef.current();
+  }, [diasNuevos]);
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
@@ -253,13 +293,27 @@ function App() {
     const texto = normalizeText(busqueda.trim());
     const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
     return (ots || []).filter((a) => (
-      entraEnElDia(a, dia, dayjs().format(ISO_DAY))
+      entraEnElDia(a, dia, hoy)
       && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
       && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
       && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
-  }, [ots, result, dia, busqueda, estado, destino, asignadoA]);
+  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA]);
+
+  // Everything still pending in Metabase, whatever its date: what is left to assign. The tile shows
+  // it while no person or search is selected (the pending OTs of other days have no plan yet)
+  const porAsignar = useMemo(() => {
+    if (busqueda.trim() || asignadoA.length) return null;
+    const pendientes = (ots || []).filter((a) => a.situacion === 'pendiente');
+    return {
+      total: pendientes.length,
+      vencidas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita < hoy).length,
+      hoy: pendientes.filter((a) => a.fecha_visita === hoy).length,
+      proximas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita > hoy).length,
+      sinFecha: pendientes.filter((a) => !a.fecha_visita).length,
+    };
+  }, [ots, hoy, busqueda, asignadoA]);
 
   const busy = loading || panelState.fetching;
   const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
@@ -268,7 +322,6 @@ function App() {
     .filter((t) => t.activo !== false)
     .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id), utr: utrSemana[t.id] }));
   const ediciones = Object.keys(fijas).length;
-  const hoy = dayjs().format(ISO_DAY);
 
   return (
     <Layout className="app-shell">
@@ -464,6 +517,7 @@ function App() {
                   view={vista}
                   visibles={visibles}
                   conteos={conteos}
+                  porAsignar={porAsignar}
                   horasDia={capacidad.horasSemana / capacidad.diasSemana}
                   estado={estado}
                   destino={destino}
