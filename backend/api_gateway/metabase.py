@@ -208,12 +208,21 @@ def _situacion(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
         valor = normalizar_texto(_texto(fila.get(mapeo["situacion"])))
         if "pendiente" in valor:
             return "pendiente"
-        if "asignad" in valor:
+        # Las cerradas también cuentan como asignadas: ocuparon tiempo de su técnico ese día
+        if "asignad" in valor or "cerrad" in valor:
             return "asignada"
     if "estado_app" in mapeo:
         valor = normalizar_texto(_texto(fila.get(mapeo["estado_app"])))
         return "pendiente" if valor in ("", "pending_assignment", "pending assignment") else "asignada"
     return "pendiente"
+
+
+def _hora(valor: Any) -> Optional[str]:
+    """HH:MM de una fecha con hora (ISO o texto); None si no trae hora o es medianoche"""
+    coincidencia = re.search(r"[T ](\d{1,2}):(\d{2})", _texto(valor))
+    if not coincidencia or (coincidencia.group(1) in ("0", "00") and coincidencia.group(2) == "00"):
+        return None
+    return f"{int(coincidencia.group(1)):02d}:{coincidencia.group(2)}"
 
 
 def _fecha(valor: Any) -> Optional[str]:
@@ -298,6 +307,7 @@ def filas_a_actividades(
             extras=dict(fila),
             situacion=_situacion(fila, mapeo),
             fecha_visita=_fecha(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
+            hora_visita=_hora(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
             asignado_a=(_texto(fila.get(mapeo["asignado_a"])) or None) if "asignado_a" in mapeo else None,
             contratista_asignado=(
                 (_texto(fila.get(mapeo["contratista_asignado"])) or None) if "contratista_asignado" in mapeo else None

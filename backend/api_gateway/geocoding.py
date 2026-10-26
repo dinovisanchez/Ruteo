@@ -4,6 +4,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import asyncio
+from datetime import date
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -78,6 +79,9 @@ async def geocodificar(actividades: List[Activity]) -> Tuple[int, List[str]]:
     pendientes = [a for a in actividades if a.coordinates is None and _consultas(a)]
     if not pendientes or not settings.GEOCODING_ENABLED:
         return 0, []
+    # Primero las que entran al plan (pendientes y asignadas de hoy en adelante); el historial después
+    hoy = date.today().isoformat()
+    pendientes.sort(key=lambda a: 0 if a.situacion == "pendiente" else (1 if (a.fecha_visita or "") >= hoy else 2))
 
     cache = _leer_cache()
     resueltas = 0

@@ -96,10 +96,21 @@ def tecnicos_de_la_hoja() -> List[Tecnico]:
 
 
 def leer_config() -> AsignacionConfig:
-    # La primera vez, los técnicos salen de la hoja
+    """Configuración guardada; los técnicos de la hoja que aún no están se agregan solos (una vez)"""
+    hoja = tecnicos_de_la_hoja()
     if not CONFIG_PATH.exists():
-        return AsignacionConfig(tecnicos=tecnicos_de_la_hoja())
-    return AsignacionConfig.model_validate_json(CONFIG_PATH.read_text(encoding="utf-8"))
+        return AsignacionConfig(tecnicos=hoja, hoja_importados=[t.id for t in hoja])
+    config = AsignacionConfig.model_validate_json(CONFIG_PATH.read_text(encoding="utf-8"))
+    registrados = {clave(t.nombre) for t in config.tecnicos} | {t.id for t in config.tecnicos}
+    nuevos = [t for t in hoja if t.id not in config.hoja_importados and not {clave(t.nombre), t.id} & registrados]
+    vistos = sorted(set(config.hoja_importados) | {t.id for t in hoja})
+    if nuevos or vistos != sorted(config.hoja_importados):
+        config.tecnicos += nuevos
+        config.hoja_importados = vistos
+        guardar_config(config)
+        if nuevos:
+            logger.info(f"Técnicos agregados desde la hoja: {', '.join(t.nombre for t in nuevos)}")
+    return config
 
 
 def guardar_config(config: AsignacionConfig) -> None:
@@ -154,22 +165,53 @@ class TrazadoRequest(BaseModel):
     rutas: List[TrazadoRuta]
 
 
+def _como_suena(palabra: str) -> str:
+    """Quita diferencias de ortografía que no cambian el sonido: Jhonatan = Jonathan, Gelvez ~ Gelver"""
+    palabra = re.sub(r"c([ei])", r"s\1", palabra).replace("h", "").replace("v", "b").replace("z", "s").replace("y", "i")
+    return re.sub(r"(.)\1+", r"\1", palabra)
+
+
+def _parecidas(a: str, b: str) -> bool:
+    """Misma palabra al oído, o una letra distinta en palabras de 5 o más letras ("gelver" / "gelvez")"""
+    a, b = _como_suena(a), _como_suena(b)
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5 or abs(len(a) - len(b)) > 1:
+        return False
+    anterior = list(range(len(b) + 1))
+    for i, letra_a in enumerate(a, start=1):
+        actual = [i]
+        for j, letra_b in enumerate(b, start=1):
+            actual.append(min(anterior[j] + 1, actual[j - 1] + 1, anterior[j - 1] + (letra_a != letra_b)))
+        anterior = actual
+    return anterior[-1] <= 1
+
+
 def tecnicos_mencionados(texto: Optional[str], tecnicos: List[Tecnico]) -> List[Tecnico]:
     """Técnicos de la app que aparecen en "Electricistas asignados" de Metabase.
 
     Cada persona del texto ("CARLOS ANDRÉS SALAS, Juan Reyes") coincide con el técnico
-    cuyo nombre completo está contenido en ella, sin importar mayúsculas ni tildes.
+    cuyas palabras del nombre están todas en ella, sin importar mayúsculas, tildes ni una
+    letra distinta en el apellido.
     """
     encontrados: List[Tecnico] = []
     for persona in re.split(r"[,;|/\n\[\]\"]+| y ", texto or "", flags=re.IGNORECASE):
-        palabras = set(clave(persona).split())
+        palabras = clave(persona).split()
         if not palabras:
             continue
         for tecnico in tecnicos:
-            nombre = set(clave(tecnico.nombre).split())
-            if nombre and nombre <= palabras and tecnico not in encontrados:
+            nombre = clave(tecnico.nombre).split()
+            if (
+                nombre and tecnico not in encontrados
+                and all(any(_parecidas(n, p) for p in palabras) for n in nombre)
+            ):
                 encontrados.append(tecnico)
     return encontrados
+
+
+def es_de_bia(contratista: Optional[str]) -> bool:
+    """El "Contratista asignado" de Metabase es Bia (técnicos propios)"""
+    return "bia" in clave(contratista or "").split()
 
 
 def empresa_mencionada(texto: Optional[str], sedes: List[SedeOperativa]) -> Optional[str]:
@@ -209,6 +251,7 @@ def plan_del_dia(
     externas: Dict[str, str] = {}
     notas: Dict[str, str] = {}
     parejas: List[List[str]] = []
+    sin_registrar: Dict[str, int] = {}
     otros_dias = sin_fecha = 0
 
     for actividad in actividades:
@@ -251,11 +294,20 @@ def plan_del_dia(
             fijas[codigo] = f"empresa:{empresa}"
             notas[codigo] = f"Asignada en Metabase a {actividad.contratista_asignado}"
             continue
-        if actividad.asignado_a and actividad.contratista_asignado:
+        if actividad.asignado_a and es_de_bia(actividad.contratista_asignado):
+            # Técnico de Bia que no está en la lista de la app: no es externo, falta registrarlo
+            responsable = f"{actividad.asignado_a} (Bia, sin registrar en la app)"
+            sin_registrar[actividad.asignado_a] = sin_registrar.get(actividad.asignado_a, 0) + 1
+        elif actividad.asignado_a and actividad.contratista_asignado:
             responsable = f"{actividad.asignado_a} ({actividad.contratista_asignado})"
         externas[codigo] = responsable or "Responsable sin registrar en Metabase"
 
-    metricas = {"dia": dia, "ots_otros_dias": otros_dias, "asignadas_sin_fecha": sin_fecha}
+    metricas = {
+        "dia": dia,
+        "ots_otros_dias": otros_dias,
+        "asignadas_sin_fecha": sin_fecha,
+        "bia_sin_registrar": sorted(sin_registrar),
+    }
     return del_dia, fijas, externas, notas, parejas, metricas
 
 

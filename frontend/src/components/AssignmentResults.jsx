@@ -174,7 +174,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 };
 
 const AssignmentResults = ({
-  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, estado = 'todas', destino = null, onFiltrar,
+  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, estado = 'todas', destino = null, onFiltrar, horasDia = 8.4,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
@@ -235,6 +235,9 @@ const AssignmentResults = ({
     metricas.tiempos_por_vias ? null : (metricas.aviso_vias || 'Tiempos estimados en línea recta'),
     metricas.asignadas_sin_fecha > 0 ? `${metricas.asignadas_sin_fecha} asignadas sin fecha en Metabase` : null,
     metricas.ots_sin_lista_or > 0 ? `${metricas.ots_sin_lista_or} OTs de OR sin contratistas en su zona` : null,
+    metricas.bia_sin_registrar?.length
+      ? `Técnicos de Bia en Metabase que no están en la app: ${metricas.bia_sin_registrar.join(', ')} (agrégalos en Técnicos → Gestionar)`
+      : null,
   ].filter(Boolean);
 
   const columns = [
@@ -355,6 +358,12 @@ const AssignmentResults = ({
                     <div className="route-sub">
                       {r.ruta.paradas.length} OTs{yaAsignadas ? ` (${yaAsignadas} asignadas)` : ''}
                       {' · '}{hhmm(r.ruta.hora_inicio)}–{hhmm(r.ruta.hora_fin)} · {km(r.ruta.distancia_total_km)} km
+                      {r.tipo === 'tecnico' && (
+                        ` · ${(r.ruta.tiempo_total_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} h usadas`
+                        + ` (${(r.ruta.tiempo_trabajo_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} en OTs,`
+                        + ` ${(r.ruta.tiempo_desplazamiento_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} de viaje)`
+                        + ` · UTR ${Math.round((r.ruta.tiempo_total_minutos / 60 / horasDia) * 100)} %`
+                      )}
                       {r.personas > 1 ? ` · ${r.personas} personas` : ''}
                       {r.costo !== null && r.costo !== undefined ? ` · ${formatCop(r.costo)}` : ''}
                       {' · sale de '}{r.sede.ciudad}

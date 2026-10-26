@@ -38,6 +38,7 @@ class Activity(BaseModel):
     # "asignada" cuando en Metabase ya tiene fecha y responsables
     situacion: Literal["pendiente", "asignada"] = "pendiente"
     fecha_visita: Optional[str] = None  # YYYY-MM-DD
+    hora_visita: Optional[str] = None  # HH:MM, si Metabase trae la hora
     asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
     contratista_asignado: Optional[str] = None
 
@@ -459,6 +460,8 @@ class AsignacionConfig(BaseModel):
     tipos_ot: Dict[str, TipoOT] = Field(default_factory=dict)
     # Pregunta de Metabase que se extrae por defecto (el número en /question/123-...)
     card_id: Optional[str] = None
+    # Técnicos de la hoja que ya se agregaron alguna vez (si luego se borran, no vuelven a aparecer)
+    hoja_importados: List[str] = Field(default_factory=list)
 
 
 class Zona(BaseModel):

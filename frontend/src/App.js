@@ -10,6 +10,7 @@ import dayjs from 'dayjs';
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
 import OtsTable from './components/OtsTable';
+import UtilizationDashboard from './components/UtilizationDashboard';
 import { assignActivities, getCatalog, getZones } from './services/api';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
@@ -28,35 +29,34 @@ const searchText = (codigo, actividad, responsable) => normalizeText([
   responsable, actividad?.asignado_a, actividad?.contratista_asignado,
 ].filter(Boolean).join(' '));
 
-// "Asignado a" options come from who has OTs in the plan: technicians one by one, contractors by company
-const assigneeOptions = (result) => {
-  if (!result) return [];
-  const tecnicos = new Set();
+// "Asignado a" options: every Bia technician, plus the contractors and externals with OTs in the plan
+const assigneeOptions = (result, tecnicosApp) => {
+  const tecnicos = new Set(tecnicosApp.filter((t) => t.activo !== false).map((t) => t.nombre));
   const contratistas = new Set();
-  result.rutas.forEach((r) => {
+  (result?.rutas || []).forEach((r) => {
     if (r.tipo === 'tecnico') r.integrantes.forEach((n) => tecnicos.add(n));
     else contratistas.add(r.sede.empresa);
   });
-  const externos = new Set(result.decisiones.filter((d) => d.enviar_a === 'externo').map((d) => d.responsable));
+  const externos = new Set((result?.decisiones || []).filter((d) => d.enviar_a === 'externo').map((d) => d.responsable));
   const grupos = [
     { label: 'Técnicos Bia', options: [...tecnicos].sort().map((n) => ({ value: `t:${n}`, label: n })) },
     { label: 'Contratistas', options: [...contratistas].sort().map((n) => ({ value: `c:${n}`, label: n })) },
     { label: 'Externos', options: [...externos].sort().map((n) => ({ value: `e:${n}`, label: n })) },
   ];
-  if (result.decisiones.some((d) => d.enviar_a === 'sin_asignar')) {
+  if ((result?.decisiones || []).some((d) => d.enviar_a === 'sin_asignar')) {
     grupos.push({ label: 'Otros', options: [{ value: 'sin', label: 'Sin asignar' }] });
   }
   return grupos.filter((g) => g.options.length);
 };
 
-const matchesAssignee = (decision, value) => {
-  if (!value) return true;
+// Several people can be selected: the OT matches if it goes to any of them
+const matchesAssignee = (decision, values) => !values.length || values.some((value) => {
   if (value === 'sin') return decision.enviar_a === 'sin_asignar';
   const nombre = value.slice(2);
   if (value.startsWith('t:')) return decision.enviar_a === 'tecnico' && (decision.responsable || '').split(' + ').includes(nombre);
   if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
   return decision.enviar_a === 'externo' && decision.responsable === nombre;
-};
+});
 
 function App() {
   const [loading, setLoading] = useState(false);
@@ -76,7 +76,9 @@ function App() {
   // Filters: name search, status and who it is assigned to (the date is the plan day)
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('todas');
-  const [asignadoA, setAsignadoA] = useState(null);
+  const [asignadoA, setAsignadoA] = useState([]);
+  // Weekly hours of a technician and working days, for utilization (UTR)
+  const [capacidad, setCapacidad] = useState({ horasSemana: 42, diasSemana: 5 });
   // Who the plan sends it to: "tecnico", "contratista", "externo" or "sin_asignar" (the summary tiles)
   const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
@@ -102,7 +104,15 @@ function App() {
 
   const handleAssign = useCallback(async (base, overrides = {}) => {
     baseRef.current = base;
-    const request = { ...base, dia: overrides.dia ?? dia, fijas: overrides.fijas ?? fijas };
+    const diaPlan = overrides.dia ?? dia;
+    // Only the OTs of the plan travel to the server: pending ones and those assigned for that day
+    // (the history used for utilization stays in the browser)
+    const request = {
+      ...base,
+      actividades: base.actividades.filter((a) => a.situacion !== 'asignada' || !a.fecha_visita || a.fecha_visita === diaPlan),
+      dia: diaPlan,
+      fijas: overrides.fijas ?? fijas,
+    };
     setLoading(true);
     try {
       message.loading({ content: 'Calculando el plan del día...', key: 'assign', duration: 0 });
@@ -121,7 +131,7 @@ function App() {
       }
       setResult(assignment);
       setIncluirRetorno(request.jornada.incluir_retorno);
-      setAssignedCodes(codesKey(request.actividades));
+      setAssignedCodes(codesKey(base.actividades));
       const m = assignment.metricas;
       message.success({
         content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} a técnicos, ${m.ots_con_contratistas} a contratistas`,
@@ -164,7 +174,7 @@ function App() {
     return porCodigo;
   }, [ots, result]);
 
-  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA || destino);
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino);
   const visibles = useMemo(() => {
     if (!result || !filtrosActivos) return null;
     const texto = normalizeText(busqueda.trim());
@@ -184,7 +194,7 @@ function App() {
       (a.situacion !== 'asignada' || a.fecha_visita === dia)
       && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
       && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
-      && (!asignadoA || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
+      && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
   }, [ots, result, dia, busqueda, estado, destino, asignadoA]);
@@ -281,21 +291,24 @@ function App() {
                   { value: 'lista', label: 'Lista' },
                   { value: 'mapa', label: 'Mapa' },
                   { value: 'rutas', label: 'Rutas' },
+                  { value: 'utilizacion', label: 'Utilización' },
                   { value: 'tabla', label: 'Tabla completa' },
                 ]}
               />
             </div>
 
             <div className="filter-bar">
-              <Input
-                allowClear
-                variant="filled"
-                prefix={<SearchOutlined />}
-                placeholder="Buscar por nombre, OT o dirección"
-                value={busqueda}
-                onChange={(e) => setBusqueda(e.target.value)}
-                className="filter-search"
-              />
+              {vista !== 'utilizacion' && (
+                <Input
+                  allowClear
+                  variant="filled"
+                  prefix={<SearchOutlined />}
+                  placeholder="Buscar por nombre, OT o dirección"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  className="filter-search"
+                />
+              )}
               <Space.Compact className="filter-date">
                 <Button
                   icon={<LeftOutlined />}
@@ -319,6 +332,7 @@ function App() {
               {dia !== hoy && (
                 <Button type="link" disabled={busy} onClick={() => changeDay(hoy)} style={{ paddingInline: 4 }}>Hoy</Button>
               )}
+              {vista !== 'utilizacion' && (
               <Segmented
                 value={estado}
                 onChange={setEstado}
@@ -328,20 +342,23 @@ function App() {
                   { value: 'asignadas', label: `Asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
                 ]}
               />
+              )}
               <Select
+                mode="multiple"
                 allowClear
                 showSearch
+                maxTagCount="responsive"
                 variant="filled"
                 placeholder="Asignado a"
                 value={asignadoA}
                 onChange={setAsignadoA}
-                options={assigneeOptions(result)}
+                options={assigneeOptions(result, config.tecnicos)}
                 optionFilterProp="label"
                 popupMatchSelectWidth={false}
                 className="filter-assignee"
               />
               {filtrosActivos && (
-                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA(null); setDestino(null); }} style={{ paddingInline: 4 }}>
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); }} style={{ paddingInline: 4 }}>
                   Limpiar
                 </Button>
               )}
@@ -366,7 +383,19 @@ function App() {
                   <OtsTable ots={otsFiltradas} nuevas={nuevas} mapeo={mapeo} config={config} title={`OTs del día (${otsFiltradas.length})`} />
                 ) : <EmptyState />
               )}
-              {vista !== 'tabla' && (result ? (
+              {vista === 'utilizacion' && (
+                <UtilizationDashboard
+                  ots={ots}
+                  config={config}
+                  dia={dia}
+                  result={result}
+                  tecnicosFiltro={asignadoA.filter((v) => v.startsWith('t:')).map((v) => v.slice(2))}
+                  horasSemana={capacidad.horasSemana}
+                  diasSemana={capacidad.diasSemana}
+                  onCapacidad={(cambio) => setCapacidad((prev) => ({ ...prev, ...cambio }))}
+                />
+              )}
+              {vista !== 'tabla' && vista !== 'utilizacion' && (result ? (
                 <AssignmentResults
                   result={result}
                   ots={ots}
@@ -374,6 +403,7 @@ function App() {
                   incluirRetorno={incluirRetorno}
                   view={vista}
                   visibles={visibles}
+                  horasDia={capacidad.horasSemana / capacidad.diasSemana}
                   estado={estado}
                   destino={destino}
                   onFiltrar={({ estado: nuevoEstado, destino: nuevoDestino }) => {
