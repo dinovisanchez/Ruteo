@@ -3,7 +3,8 @@ import {
   Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tooltip, Input, Select,
 } from 'antd';
 import {
-  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined,
+  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  TeamOutlined, ShopOutlined, AppstoreOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -20,6 +21,26 @@ import { normalizeText } from './services/otTypes';
 import './App.css';
 
 const { Header, Content, Sider } = Layout;
+
+// Whether the panel is shown: remembered in this browser; the first time, open on wide screens
+const PANEL_KEY = 'ruteo_panel_abierto';
+const leerPanel = () => {
+  try {
+    const guardado = localStorage.getItem(PANEL_KEY);
+    if (guardado !== null) return guardado === '1';
+  } catch (error) {
+    // Without storage it uses the screen width
+  }
+  return window.innerWidth >= 992;
+};
+
+// Sections of the panel the toolbar opens directly
+const SECCIONES_PANEL = [
+  { key: 'tecnicos', label: 'Técnicos', icon: <TeamOutlined /> },
+  { key: 'contratistas', label: 'Contratistas por OR', icon: <ShopOutlined /> },
+  { key: 'tipos', label: 'Tipos de OT', icon: <AppstoreOutlined /> },
+  { key: 'ajustes', label: 'Ajustes', icon: <SettingOutlined /> },
+];
 
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
 
@@ -100,7 +121,7 @@ const useHoy = () => {
 
 function App() {
   const [loading, setLoading] = useState(false);
-  const [siderCollapsed, setSiderCollapsed] = useState(false);
+  const [panelAbierto, setPanelAbierto] = useState(leerPanel);
   const [ots, setOts] = useState(null);
   const [nuevas, setNuevas] = useState(new Set());
   const [source, setSource] = useState('');
@@ -132,6 +153,19 @@ function App() {
   const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
   const baseRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_KEY, panelAbierto ? '1' : '0');
+    } catch (error) {
+      // Without storage it is not remembered
+    }
+  }, [panelAbierto]);
+
+  const abrirSeccion = (key) => {
+    setPanelAbierto(true);
+    panelRef.current?.abrirSeccion(key);
+  };
 
   useEffect(() => {
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
@@ -396,6 +430,30 @@ function App() {
       </Header>
 
       <Layout>
+        <nav className="tool-rail" aria-label="Barra de herramientas">
+          <Tooltip title={panelAbierto ? 'Ocultar panel' : 'Mostrar panel'} placement="right">
+            <Button
+              type="text"
+              className="rail-button"
+              aria-label={panelAbierto ? 'Ocultar panel' : 'Mostrar panel'}
+              aria-pressed={panelAbierto}
+              icon={panelAbierto ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+              onClick={() => setPanelAbierto((abierto) => !abierto)}
+            />
+          </Tooltip>
+          <div className="rail-divider" />
+          {SECCIONES_PANEL.map((seccion) => (
+            <Tooltip key={seccion.key} title={seccion.label} placement="right">
+              <Button
+                type="text"
+                className="rail-button"
+                aria-label={seccion.label}
+                icon={seccion.icon}
+                onClick={() => abrirSeccion(seccion.key)}
+              />
+            </Tooltip>
+          ))}
+        </nav>
         <Sider
           width={340}
           className="ios-sider"
@@ -406,14 +464,14 @@ function App() {
             top: 56,
             left: 0,
           }}
-          collapsible
-          collapsed={siderCollapsed}
-          onCollapse={setSiderCollapsed}
+          collapsed={!panelAbierto}
           collapsedWidth={0}
+          trigger={null}
           breakpoint="lg"
+          // On a narrow screen it starts hidden; the toolbar shows it
+          onBreakpoint={(estrecha) => { if (estrecha) setPanelAbierto(false); }}
         >
-          {/* Bottom padding so the sider collapse trigger does not cover the last section */}
-          <div style={{ padding: '8px 0 72px' }}>
+          <div style={{ padding: '8px 0 24px' }}>
             <AssignmentPanel
               ref={panelRef}
               ots={ots}

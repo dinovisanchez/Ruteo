@@ -256,6 +256,18 @@ const AssignmentPanel = forwardRef(({
     extract: () => actionsRef.current.extract(),
     refresh: () => actionsRef.current.refresh(),
     recalc: () => actionsRef.current.recalc(),
+    // From the toolbar: expands a section and scrolls to it (after the panel opens)
+    abrirSeccion: (key) => {
+      setAbiertas((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      // Only the panel scrolls, not the page
+      setTimeout(() => {
+        const titulo = document.getElementById(`seccion-${key}`);
+        const panel = titulo?.closest('.ant-layout-sider');
+        if (!titulo || !panel) return;
+        const arriba = titulo.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop;
+        panel.scrollTo({ top: Math.max(0, arriba - 16), behavior: 'smooth' });
+      }, 250);
+    },
   }), []);
 
   const canExtract = Boolean(status?.configurado && cardId.trim());
@@ -655,25 +667,25 @@ const AssignmentPanel = forwardRef(({
         items={[
           {
             key: 'tecnicos',
-            label: 'Técnicos',
+            label: <span id="seccion-tecnicos">Técnicos</span>,
             extra: <Text type="secondary">{disponibles.length} de {tecnicosActivos.length} · {dayjs(dia).format('ddd D')}</Text>,
             children: tecnicosSection,
           },
           {
             key: 'contratistas',
-            label: 'Contratistas por OR',
+            label: <span id="seccion-contratistas">Contratistas por OR</span>,
             extra: orRows.length ? <Text type="secondary">{orRows.length} OR</Text> : null,
             children: contratistasSection,
           },
           {
             key: 'tipos',
-            label: 'Tipos de OT',
+            label: <span id="seccion-tipos">Tipos de OT</span>,
             extra: services.length ? <Text type="secondary">{services.length}</Text> : null,
             children: tiposSection,
           },
           {
             key: 'ajustes',
-            label: 'Ajustes',
+            label: <span id="seccion-ajustes">Ajustes</span>,
             forceRender: true,
             children: ajustesSection,
           },

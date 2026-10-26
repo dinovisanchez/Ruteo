@@ -178,16 +178,52 @@ body {
   color: var(--label-2);
 }
 
-/* No backdrop-filter here: it would turn the sider into the containing block of its
-   fixed collapse trigger and move the trigger into the middle of the panel */
+/* Toolbar: always visible, it hides and shows the panel and opens it at a section */
+.tool-rail {
+  position: sticky;
+  top: 56px;
+  z-index: 1000;
+  flex: 0 0 52px;
+  width: 52px;
+  height: calc(100vh - 56px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 10px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--hairline);
+}
+
+.rail-button.ant-btn {
+  width: 36px;
+  height: 36px;
+  color: var(--label-2);
+}
+
+.rail-button.ant-btn:hover {
+  color: var(--label);
+}
+
+.rail-button.ant-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.rail-divider {
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--hairline);
+}
+
 .ios-sider {
   background: var(--sidebar) !important;
   border-right: 1px solid var(--hairline);
 }
 
-.ios-sider .ant-layout-sider-trigger {
-  background: var(--sidebar);
-  border-top: 1px solid var(--hairline);
+/* Hidden, the panel leaves no line next to the toolbar */
+.ios-sider.ant-layout-sider-collapsed {
+  border-right: none;
 }
 
 /* Sidebar: plain sections separated by hairlines */
@@ -873,7 +909,23 @@ body {
   border-radius: 8px;
 }
 
+/* On narrow screens the panel floats over the content, next to the toolbar */
+@media (max-width: 992px) {
+  .ios-sider {
+    left: 52px !important;
+  }
+}
+
 @media (max-width: 768px) {
+  .tool-rail {
+    flex-basis: 44px;
+    width: 44px;
+  }
+
+  .ios-sider {
+    left: 44px !important;
+  }
+
   .main-pane {
     padding: 0 16px 24px;
   }

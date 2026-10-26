@@ -294,7 +294,7 @@ BIA003,instalacion,"4.6200,-74.0900",Cliente 3,Carrera 789 #12-34,Bogotá,Cundin
 
 ## 🚀 Uso de la Aplicación
 
-Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*.
+Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*. La **barra de herramientas** del borde izquierdo esconde y muestra ese panel (la app recuerda cómo lo dejaste) y con sus iconos lo abre directo en *Técnicos*, *Contratistas por OR*, *Tipos de OT* o *Ajustes*; en pantallas pequeñas el panel empieza escondido y se abre sobre el contenido.
 
 ### Plan del día
 
