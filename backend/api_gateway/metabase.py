@@ -43,6 +43,11 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     "asignado_a": ["electricistas asignados", "electricistas", "tecnicos asignados", "tecnico asignado"],
     "contratista_asignado": ["contratista asignado", "contratista"],
     "electricista_id": ["id electricista", "id del electricista", "electrician id", "electrician"],
+    # Quién creó la OT y cuándo
+    "creado_por": ["creado por", "creada por", "creador", "creado por usuario", "usuario creador", "created by",
+                   "creada por usuario", "autor"],
+    "fecha_creacion": ["fecha de creacion", "fecha creacion", "creado el", "creada el", "created at",
+                       "fecha de registro"],
     # La duración de una instalación depende del tipo de medida
     "tipo_medida": ["tipo de medida", "tipo medida", "medida", "measurement type", "measurement type id"],
 }
@@ -314,6 +319,8 @@ def filas_a_actividades(
             contratista_asignado=(
                 (_texto(fila.get(mapeo["contratista_asignado"])) or None) if "contratista_asignado" in mapeo else None
             ),
+            creado_por=(_texto(fila.get(mapeo["creado_por"])) or None) if "creado_por" in mapeo else None,
+            fecha_creacion=_fecha(fila.get(mapeo["fecha_creacion"])) if "fecha_creacion" in mapeo else None,
         ))
     if duplicadas:
         avisos.append(f"{duplicadas} filas repetidas (mismo código de OT) se tomaron una sola vez")

@@ -34,6 +34,11 @@ const otCell = (actividad, codigo, nuevas) => (
       </Tooltip>
     )}
     <div className="ot-cell-sub">{[actividad?.servicio, actividad?.nombre, actividad?.ciudad].filter(Boolean).join(' · ')}</div>
+    {actividad?.creado_por && (
+      <div className="ot-cell-sub ot-creator">
+        Creada por {actividad.creado_por}{actividad.fecha_creacion ? ` · ${dayjs(actividad.fecha_creacion).format('D MMM')}` : ''}
+      </div>
+    )}
   </div>
 );
 
@@ -91,13 +96,15 @@ const exportCsv = (rows, dia) => {
 
   // ";" and decimal comma so it opens directly in Excel configured in Spanish
   const header = ['Día', 'OT', 'Situación', 'OR', 'Ciudad', 'Dirección', 'Tipo de OT', 'Personas', 'Enviar a', 'Responsable',
-    'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Motivo', ...extraKeys];
+    'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Creada por',
+    'Fecha de creación', 'Motivo', ...extraKeys];
   const lines = rows.map(({ decision: d, actividad: a, parada }) => [
     dia, d.codigo_bia, d.situacion === 'asignada' ? 'Asignada' : 'Por asignar', a?.or_operador, a?.ciudad, a?.direccion,
     a?.servicio, a?.personas_requeridas, DESTINO[d.enviar_a], d.responsable, d.fijada ? 'Sí' : 'No', d.sede,
     d.distancia_base_km === null || d.distancia_base_km === undefined ? '' : String(d.distancia_base_km).replace('.', ','),
     parada?.secuencia, hhmm(parada?.hora_llegada_estimada), hhmm(parada?.hora_salida_estimada),
-    a?.coordenadas_aproximadas ? 'Sí' : 'No', d.motivo, ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
+    a?.coordenadas_aproximadas ? 'Sí' : 'No', a?.creado_por, a?.fecha_creacion, d.motivo,
+    ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
   ]);
   const csv = [header, ...lines].map((row) => row.map(csvValue).join(';')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
@@ -125,7 +132,7 @@ const stopColumns = (nuevas, situaciones) => [
  * Options to change who attends an OT: let the app decide, an available technician,
  * the nearest contractor of its OR, or a specific contractor.
  */
-const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
+export const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
   {
     label: 'Automático',
     options: [{ value: 'auto', label: yaAsignada ? 'Que la app la reasigne' : 'Que decida la app' }],
@@ -201,6 +208,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 const AssignmentResults = ({
   result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
   onFiltrar, horasDia = 8.4, porAsignar = null, pendientesTodas = null, onPlanearDia, hoy,
+  seleccion = [], onSeleccion,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
@@ -416,6 +424,9 @@ const AssignmentResults = ({
         {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
         {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
+        {metricas.ots_agrupadas ? (
+          <span>{metricas.ots_agrupadas} OTs van juntas por estar a {km(metricas.radio_grupo_km)} km o menos</span>
+        ) : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
         <Tooltip title="Descargar el plan en CSV">
           <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />
@@ -442,6 +453,14 @@ const AssignmentResults = ({
           dataSource={rows}
           // Minimum width: "Por qué" takes the rest of the row
           scroll={{ x: 980 }}
+          // Several OTs can be selected to assign them together (the bar at the bottom)
+          rowSelection={onSeleccion ? {
+            selectedRowKeys: seleccion,
+            onChange: onSeleccion,
+            preserveSelectedRowKeys: true,
+            columnWidth: 40,
+            fixed: true,
+          } : undefined}
           pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
           expandable={{
             expandedRowRender: (r) => (

@@ -128,6 +128,18 @@ export const assignActivities = async (request) => {
 };
 
 /**
+ * Proposal for assigning several OTs together: the ones close to each other form a group and each
+ * group goes to the available technician of its team with the lowest UTR of the week
+ * @param {Object} request - same as assignActivities, plus `codigos` (the selected OTs)
+ * @returns {Promise<Object>} { radio_km, grupos: [{ codigos, tecnico_id, tecnico, minutos, km_max,
+ *   personas, cabe, utr_antes, utr_despues, opciones }], sin_tecnico: [{ codigo, motivo }], sin_ubicacion }
+ */
+export const proposeBatch = async (request) => {
+  const response = await apiClient.post('/asignar/lote', request);
+  return response.data;
+};
+
+/**
  * Network operators (OR) with the departments they serve and the contractors based there
  * @param {string[]} nombres - OR names as they appear in the OTs, to match them to the catalog
  * @returns {Promise<Object>} { operadores: [{ nombre, departamentos, notas, empresas_auto }], resueltos }

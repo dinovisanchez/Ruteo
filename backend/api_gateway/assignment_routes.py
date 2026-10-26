@@ -512,14 +512,17 @@ async def actualizar_config(config: AsignacionConfig):
     return config
 
 
-@router.post("/asignar", response_model=AssignmentResult)
-async def asignar(request: AsignarRequest):
-    """
-    Plan del día: toma las OTs pendientes y las ya asignadas para ese día (filtradas por OR)
-    y decide a quién enviar cada una:
-    - las asignadas se quedan con su técnico o contratista (si el técnico no está
-      disponible, se reasignan); las ediciones a mano mandan sobre Metabase
-    - las pendientes van a los técnicos disponibles o al contratista más cercano de su OR
+class LoteRequest(AsignarRequest):
+    # OTs elegidas para asignar juntas
+    codigos: List[str]
+
+
+async def _pedido_del_dia(
+    request: AsignarRequest,
+) -> Tuple[AssignmentRequest, Dict, JornadaConfig, List[List[float]], Optional[MatrizVial], Optional[str]]:
+    """Arma el pedido al optimizador para el día: OTs del día, fijadas, cuadrillas, coberturas y tiempos.
+
+    Devuelve (pedido, métricas del día, jornada, puntos, matriz por vías, aviso si no hay vías).
     """
     filtro = {normalizar_texto(o) for o in request.or_filtro}
     actividades = [a for a in request.actividades if not filtro or normalizar_texto(a.or_operador) in filtro]
@@ -593,17 +596,31 @@ async def asignar(request: AsignarRequest):
         disponible_previo=request.disponible_previo,
         jornada=jornada,
     )
+    return pedido, metricas_dia, jornada, puntos, matriz, aviso_vias
+
+
+async def _al_optimizador(ruta: str, cuerpo: Dict) -> Dict:
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            respuesta = await client.post(
-                f"{settings.OPTIMIZER_SERVICE_URL}/assign",
-                json=pedido.model_dump(mode="json"),
-            )
+            respuesta = await client.post(f"{settings.OPTIMIZER_SERVICE_URL}{ruta}", json=cuerpo)
     except httpx.RequestError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Optimizer service unavailable: {e}")
     if respuesta.status_code != 200:
         raise HTTPException(status_code=respuesta.status_code, detail=respuesta.json().get("detail", respuesta.text))
-    resultado = AssignmentResult(**respuesta.json())
+    return respuesta.json()
+
+
+@router.post("/asignar", response_model=AssignmentResult)
+async def asignar(request: AsignarRequest):
+    """
+    Plan del día: toma las OTs pendientes y las ya asignadas para ese día (filtradas por OR)
+    y decide a quién enviar cada una:
+    - las asignadas se quedan con su técnico o contratista (si el técnico no está
+      disponible, se reasignan); las ediciones a mano mandan sobre Metabase
+    - las pendientes van a los técnicos disponibles o al contratista más cercano de su OR
+    """
+    pedido, metricas_dia, jornada, puntos, matriz, aviso_vias = await _pedido_del_dia(request)
+    resultado = AssignmentResult(**await _al_optimizador("/assign", pedido.model_dump(mode="json")))
     resultado.metricas.update(metricas_dia)
     resultado.metricas["tiempos_por_vias"] = matriz is not None
     resultado.metricas["aviso_vias"] = aviso_vias
@@ -613,6 +630,19 @@ async def asignar(request: AsignarRequest):
     # El mapa pide estas mismas rutas; se trazan ya para que estén listas al abrirlo
     trazado.precargar([puntos_ruta(r, jornada.incluir_retorno) for r in resultado.rutas])
     return resultado
+
+
+@router.post("/asignar/lote", response_model=dict)
+async def asignar_lote(request: LoteRequest):
+    """
+    Propuesta para asignar varias OTs juntas: las que están cerca entre sí (radio_grupo_km,
+    2 km por defecto) forman un grupo y cada grupo va al técnico disponible de su equipo con
+    la UTR más baja de la semana. No cambia nada: la app aplica la propuesta como ediciones.
+    """
+    if not request.codigos:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Elige al menos una OT")
+    pedido, _, _, _, _, _ = await _pedido_del_dia(request)
+    return await _al_optimizador("/lote", {"pedido": pedido.model_dump(mode="json"), "codigos": request.codigos})
 
 
 def puntos_ruta(asignada, incluir_retorno: bool) -> List[List[float]]:

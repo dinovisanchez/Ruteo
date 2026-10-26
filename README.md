@@ -294,6 +294,8 @@ BIA003,instalacion,"4.6200,-74.0900",Cliente 3,Carrera 789 #12-34,Bogotá,Cundin
 
 ## 🚀 Uso de la Aplicación
 
+La arquitectura (servicios, endpoints, qué pantalla usa cada uno y los flujos) está en [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
+
 Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*. La **barra de herramientas** del borde izquierdo esconde y muestra ese panel (la app recuerda cómo lo dejaste) y con sus iconos lo abre directo en *Técnicos*, *Contratistas por OR*, *Tipos de OT* o *Ajustes*; en pantallas pequeñas el panel empieza escondido y se abre sobre el contenido.
 
 ### Plan del día
@@ -304,6 +306,7 @@ Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha)
 - **Pendientes.** La app sugiere a quién enviarlas con las reglas de abajo, llenando la jornada de los técnicos disponibles junto con lo que ya tienen asignado.
 - **Filtros.** Buscar por nombre (cliente, OT, dirección, técnico o contratista), fecha, *Todas · Por asignar · Asignadas* y *Asignado a* (uno o varios técnicos, contratistas o externos). Las tarjetas del resumen cuentan lo que seleccionas: si eliges un técnico en *Asignado a*, muestran sus OTs, sus asignadas y por asignar, los km y las horas de su ruta. También son filtros (*Asignadas*, *Por asignar*, *Técnicos Bia*, *Contratistas*, *Externas*, *Sin asignar*): al tocar una se filtra por ella, al tocarla otra vez se quita, y se pueden combinar (por ejemplo *Por asignar* + *Contratistas*); *OTs del día* quita esos filtros. *Por asignar* son las pendientes que entran en el plan del día elegido; **Falta por asignar** (tarjeta y botón en la barra) son **todas** las pendientes de Metabase sin importar la fecha. Al tocarla la lista muestra cada una con su fecha de visita (vencidas primero, luego para hoy, próximos días y sin fecha), a quién la manda el plan si entra en el día que estás viendo y un botón *Planear hoy* / *Planear el …* que abre el plan de ese día. La búsqueda y *Asignado a* también la filtran. Todo filtra la lista, el mapa, las rutas y la tabla completa.
 - **Editar.** En la columna *Enviar a* cada OT tiene un selector: *Que decida la app*, un técnico disponible, *El más cercano de su OR* o un contratista concreto. Al cambiarlo la app recalcula el plan respetando la edición (etiqueta *Editada*); *Quitar ediciones* vuelve a la sugerencia. Si una OT fijada no cabe en la jornada de su técnico, la ruta se marca como *Supera la jornada* y las demás OTs pasan a otros técnicos o contratistas.
+- **Varias OTs a la vez (lote).** En la lista, marca las casillas de las OTs y abajo aparece una barra para mandarlas todas a un técnico, a un contratista, a *Que decida la app* o **por cercanía**. Por cercanía, la app junta las que están a 2 km o menos entre sí y propone cada grupo al técnico de su equipo con la **UTR más baja de la semana** (contando lo que ya tiene ese día); la propuesta muestra la UTR antes y después, si cabe en su jornada y si necesita pareja, y se puede cambiar el técnico de cada grupo. Al asignar, la app recalcula el plan y abre el **mapa con la ruta** de esos técnicos.
 - **Mapa por carretera.** Cada ruta se dibuja siguiendo las vías con OSRM: el servidor público `router.project-osrm.org` y, si no responde, el de OpenStreetMap (`OSRM_URL` y `OSRM_URL_RESPALDO` en `backend/.env`). El backend traza las rutas apenas se calcula el plan, así que el mapa suele abrir ya trazado. Si el backend no llega a OSRM (por ejemplo, por un proxy), el navegador consulta directo, tanto el trazado como los tiempos por carretera. Mientras traza se ve "Trazando por carretera · n/m"; si una ruta no se puede trazar, el mapa dice por qué. `GET /api/rutas/estado` dice si el backend llega a OSRM. Los cuadrados son OTs ya asignadas y los círculos, sugeridas.
 
 ### Cómo decide (modo automático)
@@ -314,8 +317,9 @@ Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha)
 
    Una OT entra en una zona si su municipio está en la lista de la zona o si cae dentro de su radio. Las OTs de la zona de un equipo con técnicos disponibles se reparten entre ellos, cada uno saliendo de su base y sin pasar de las **horas de trabajo** (8 por defecto, incluyendo desplazamientos y el regreso a la base). La carga se reparte de forma pareja. Si no hay zonas definidas, vale la regla anterior: las OTs a menos de *Radio técnicos* de una base.
    **Reparto parejo.** Antes de repartir, la app mira cuánto ha trabajado cada técnico en la semana (de lunes al día anterior, en horas usadas) y le da más OTs a quien lleva menos, para que la semana quede pareja; el motivo dice la UTR de la semana de quien la recibe y, al cambiar *Enviar a*, los técnicos aparecen de menor a mayor UTR.
-2. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base (respetando las que ya salen juntas en Metabase), o puedes fijarlas con el selector *Pareja*.
-3. **Contratistas para el resto.** Las OTs fuera de la zona de los equipos Bia, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que pueden atender su OR**, en este orden: la lista que fijes a mano en *Contratistas por OR*; si no hay, los contratistas con sede en los **departamentos donde opera el OR** (catálogo `backend/data/operadores_red.csv`, que reconoce variantes como "ENEL COLOMBIA S.A. E.S.P." o "Codensa"); si el OR no está en el catálogo, los del departamento de la OT; y si nadie tiene sede en la zona, el más cercano de todos. Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
+2. **OTs cercanas juntas.** Las OTs a **2 km o menos** por carretera (*Ajustes → Jornada → Juntar OTs a*) van a la misma cuadrilla en vez de repartirse entre varios técnicos; el reparto por UTR decide cuál (la de menor carga en la semana, y lo que no le cabe pasa al siguiente con menos carga). El motivo dice *Va junto con…*. Un grupo nunca pasa del 60 % de la jornada; si aun así no cabe, se separa.
+3. **Personas por OT.** Las OTs de 2 personas (por defecto Instalación, Emergencia y Normalización medida) solo van a parejas de técnicos; la app arma las parejas que hacen falta en cada base (respetando las que ya salen juntas en Metabase), o puedes fijarlas con el selector *Pareja*. Si a un técnico le fijas una OT de 2 personas (a mano o por lote), sale en pareja.
+4. **Contratistas para el resto.** Las OTs fuera de la zona de los equipos Bia, las que no caben en la jornada de los técnicos y las que piden más personas de las disponibles van al **contratista más cercano entre los que pueden atender su OR**, en este orden: la lista que fijes a mano en *Contratistas por OR*; si no hay, los contratistas con sede en los **departamentos donde opera el OR** (catálogo `backend/data/operadores_red.csv`, que reconoce variantes como "ENEL COLOMBIA S.A. E.S.P." o "Codensa"); si el OR no está en el catálogo, los del departamento de la OT; y si nadie tiene sede en la zona, el más cercano de todos. Para cada sede elegida se arman las cuadrillas mínimas para que todo quepa en la jornada.
 
 El resultado muestra la lista de OTs con a quién enviarlas, la hora de llegada y el motivo (al desplegar una fila: OR, personas, de dónde sale, otras opciones y todas sus columnas), el mapa, las rutas de cada técnico o cuadrilla con su costo, y todas las columnas de la pregunta. Todo se descarga en CSV. En *Ajustes* se puede cambiar a *Solo técnicos* o *Solo contratistas*, filtrar por OR y ajustar la jornada y el tránsito.
 
@@ -384,7 +388,9 @@ SELECT
   operador_de_red AS "OR",
   address AS "Dirección",
   city_name AS "Ciudad",
-  department AS "Departamento"
+  department AS "Departamento",
+  created_by AS "Creado por",
+  created_at AS "Fecha de creación"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
   AND (
@@ -401,6 +407,8 @@ WHERE deleted_at IS NULL
 ORDER BY fecha_visita NULLS LAST, card_id;
 ```
 
+**Quién creó la OT.** `Creado por` y `Fecha de creación` salen en la lista (debajo de cada OT), en la tabla completa, en el CSV y en la búsqueda. `created_by` y `created_at` son los nombres más comunes: confirma en Metabase cómo se llaman en `operations.visitas_general` (al editar la pregunta, en la lista de columnas de la tabla). Si `created_by` trae un id y no un nombre, cruza con la tabla de usuarios para traer el nombre, por ejemplo `LEFT JOIN <tabla de usuarios> u ON u.id = v.created_by` y `u.name AS "Creado por"`. La app reconoce también `Creada por`, `Creador` y `Created by`.
+
 Las visitas cerradas solo sirven para la utilización: no entran al plan salvo las del mismo día (que ya ocuparon tiempo de su técnico). La última condición toma las de técnicos de Bia; si en Metabase el contratista de Bia se llama distinto, ajusta `contratista ILIKE '%bia%'`.
 
 **2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.
@@ -415,7 +423,7 @@ Con *Actualizar cada N min* la app vuelve a traer la pregunta sola, avisa cuánt
 
 > Para decidir y estimar horarios, las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*); el mapa sí dibuja la ruta por las vías.
 
-Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/rutas/trazado`, `GET /api/rutas/estado`, `GET /api/zonas`, `POST /api/utilizacion`.
+Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/asignar/lote` (propuesta por cercanía para las OTs elegidas), `POST /api/rutas/trazado`, `GET /api/rutas/estado`, `GET /api/zonas`, `POST /api/utilizacion`.
 
 ---
 

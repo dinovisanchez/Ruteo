@@ -550,6 +550,10 @@ body {
   color: var(--label-2);
 }
 
+.ot-creator {
+  color: var(--label-3);
+}
+
 .new-badge {
   margin-left: 6px;
   font-size: 11px;
@@ -571,6 +575,98 @@ body {
 .muted-icon {
   color: var(--label-3);
   font-size: 12px;
+}
+
+/* Batch of selected OTs: floats at the bottom of the list while scrolling */
+.lote-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+
+.lote-count {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.lote-select {
+  min-width: 280px;
+  flex: 1 1 280px;
+  max-width: 380px;
+}
+
+.lote-intro {
+  color: var(--label-2);
+  margin-bottom: 14px;
+}
+
+.lote-grupos {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.lote-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--fill);
+}
+
+.lote-grupo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.lote-grupo-meta {
+  font-size: 12px;
+  color: var(--label-2);
+}
+
+.lote-grupo-tecnico {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.lote-ots {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lote-ots li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 13px;
+}
+
+.lote-ot-sub {
+  color: var(--label-2);
 }
 
 .muted-text {

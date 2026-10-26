@@ -49,6 +49,10 @@ PESO_RUTA_MAS_LARGA = 10
 # Costo por minuto que una ruta supera la carga promedio de su base (segunda pasada)
 PESO_EXCESO_META = 20
 MAX_ALTERNATIVAS = 3
+# Un grupo de OTs cercanas no pasa de esta parte de la jornada, para que quepa con el viaje desde la base
+FRACCION_GRUPO = 0.6
+# En el motivo se nombran hasta estas OTs del grupo
+MAX_NOMBRADAS = 3
 
 
 def _tiempos_servicio(jornada: JornadaConfig) -> Dict[str, int]:
@@ -64,6 +68,8 @@ def _resolver_vrp(
     metas: Optional[List[Optional[int]]] = None,
     permitidos: Optional[List[Optional[List[int]]]] = None,
     fijadas: Optional[Set[int]] = None,
+    servicio_nodos: Optional[List[int]] = None,
+    pesos_meta: Optional[List[int]] = None,
 ) -> Tuple[List[List[int]], List[int], List[int]]:
     """Reparte las actividades entre vehículos que salen de `inicios`.
 
@@ -71,8 +77,10 @@ def _resolver_vrp(
     actividades que no caben quedan descartadas. `metas` penaliza los minutos
     que cada vehículo pasa de su meta. `permitidos[i]` limita la actividad i a
     esos vehículos (None = cualquiera) y las `fijadas` se descartan de últimas.
-    Devuelve (rutas, descartadas, minutos por vehículo), con índices sobre
-    `actividades`.
+    `servicio_nodos` reemplaza los minutos de servicio de cada actividad (un grupo
+    de OTs cercanas viaja como una sola) y `pesos_meta` da a cada vehículo su costo
+    por minuto sobre la meta. Devuelve (rutas, descartadas, minutos por vehículo),
+    con índices sobre `actividades`.
     """
     n, m = len(actividades), len(inicios)
     if n == 0:
@@ -90,7 +98,10 @@ def _resolver_vrp(
         for j in range(m + n):
             if i != j:
                 viaje[i][j] = dist.minutos(puntos[i], puntos[j])
-    servicio_nodo = [0] * m + [get_service_time(a.servicio, servicios) for a in actividades] + [0]
+    minutos_servicio = servicio_nodos if servicio_nodos is not None else [
+        get_service_time(a.servicio, servicios) for a in actividades
+    ]
+    servicio_nodo = [0] * m + list(minutos_servicio) + [0]
 
     finales = list(range(m)) if jornada.incluir_retorno else [fin_libre] * m
     manager = pywrapcp.RoutingIndexManager(total_nodos, m, list(range(m)), finales)
@@ -109,7 +120,8 @@ def _resolver_vrp(
     dimension_tiempo.SetGlobalSpanCostCoefficient(PESO_RUTA_MAS_LARGA)
     for vehiculo, meta in enumerate(metas or []):
         if meta is not None:
-            dimension_tiempo.SetCumulVarSoftUpperBound(routing.End(vehiculo), meta, PESO_EXCESO_META)
+            peso = pesos_meta[vehiculo] if pesos_meta else PESO_EXCESO_META
+            dimension_tiempo.SetCumulVarSoftUpperBound(routing.End(vehiculo), meta, peso)
 
     if jornada.capacidad_maxima_actividades:
         def demanda(indice):
@@ -183,6 +195,7 @@ def _resolver_balanceado(
     permitidos: Optional[List[Optional[List[int]]]] = None,
     fijadas: Optional[Set[int]] = None,
     previos: Optional[List[float]] = None,
+    servicio_nodos: Optional[List[int]] = None,
 ) -> Tuple[List[List[int]], List[int]]:
     """Como `_resolver_vrp`, pero reparte la carga entre los vehículos de un mismo grupo (base).
 
@@ -192,7 +205,8 @@ def _resolver_balanceado(
     solución si no deja más OTs sin asignar.
     """
     rutas, descartadas, minutos = _resolver_vrp(
-        actividades, inicios, jornada, dist, limite_segundos, permitidos=permitidos, fijadas=fijadas
+        actividades, inicios, jornada, dist, limite_segundos,
+        permitidos=permitidos, fijadas=fijadas, servicio_nodos=servicio_nodos,
     )
     por_grupo: Dict[str, List[int]] = {}
     for vehiculo, grupo in enumerate(grupos):
@@ -201,6 +215,7 @@ def _resolver_balanceado(
         return rutas, descartadas
 
     metas: List[Optional[int]] = [None] * len(inicios)
+    pesos: List[int] = [PESO_EXCESO_META] * len(inicios)
     for vehiculos in por_grupo.values():
         if len(vehiculos) < 2:
             continue
@@ -208,15 +223,79 @@ def _resolver_balanceado(
         if previos:
             for v, meta in zip(vehiculos, _metas_parejas(total, [previos[v] for v in vehiculos])):
                 metas[v] = meta
+            # Lo que no cabe en las metas va primero a quien lleva menos en la semana:
+            # pasarse de la meta cuesta más cuanto más ha trabajado
+            bajo, alto = min(previos[v] for v in vehiculos), max(previos[v] for v in vehiculos)
+            for v in vehiculos:
+                pesos[v] = PESO_EXCESO_META + round(PESO_EXCESO_META * (previos[v] - bajo) / max(1.0, alto - bajo))
         else:
             for v in vehiculos:
                 metas[v] = math.ceil(total / len(vehiculos))
     rutas_b, descartadas_b, _ = _resolver_vrp(
-        actividades, inicios, jornada, dist, limite_segundos, metas, permitidos, fijadas
+        actividades, inicios, jornada, dist, limite_segundos, metas, permitidos, fijadas, servicio_nodos, pesos
     )
     if len(descartadas_b) <= len(descartadas):
         return rutas_b, descartadas_b
     return rutas, descartadas
+
+
+def _orden_cercania(indices: List[int], actividades: List[Activity], inicio: GPSCoordinates, dist: Distancias) -> List[int]:
+    """Índices en orden de visita por vecino más cercano partiendo de `inicio`"""
+    pendientes, orden, posicion = list(indices), [], inicio
+    while pendientes:
+        siguiente = min(pendientes, key=lambda i: dist.km(posicion, actividades[i].coordinates))
+        pendientes.remove(siguiente)
+        orden.append(siguiente)
+        posicion = actividades[siguiente].coordinates
+    return orden
+
+
+def _minutos_grupo(grupo: List[int], actividades: List[Activity], servicios: Dict[str, int], dist: Distancias) -> int:
+    """Servicio de todas las OTs del grupo más el viaje entre ellas, empezando por la primera"""
+    orden = [grupo[0]] + _orden_cercania(grupo[1:], actividades, actividades[grupo[0]].coordinates, dist)
+    viaje = sum(dist.minutos(actividades[a].coordinates, actividades[b].coordinates) for a, b in zip(orden, orden[1:]))
+    return viaje + sum(get_service_time(actividades[i].servicio, servicios) for i in grupo)
+
+
+def grupos_cercanos(
+    indices: List[int],
+    actividades: List[Activity],
+    claves: Dict[int, object],
+    radio_km: float,
+    tope_minutos: int,
+    servicios: Dict[str, int],
+    dist: Distancias,
+) -> List[List[int]]:
+    """Junta las OTs que están a `radio_km` o menos (por carretera) para que las haga una sola cuadrilla.
+
+    Solo se juntan OTs con la misma `clave` (las mismas cuadrillas posibles). Cada grupo crece
+    alrededor de la OT con más vecinas, de la más cercana a la más lejana, sin pasar de
+    `tope_minutos` de trabajo más viaje entre ellas. Las OTs sin vecinas quedan solas.
+    El primer índice de cada grupo es la OT del centro.
+    """
+    if radio_km <= 0 or len(indices) < 2:
+        return [[i] for i in indices]
+    km = lambda a, b: dist.km(actividades[a].coordinates, actividades[b].coordinates)
+    vecinas = {
+        i: [j for j in indices if j != i and claves.get(j) == claves.get(i) and km(i, j) <= radio_km]
+        for i in indices
+    }
+    restantes = set(indices)
+    grupos: List[List[int]] = []
+    while restantes:
+        centro = max(sorted(restantes), key=lambda i: sum(1 for j in vecinas[i] if j in restantes))
+        grupo = [centro]
+        minutos = get_service_time(actividades[centro].servicio, servicios)
+        for j in sorted((j for j in vecinas[centro] if j in restantes), key=lambda j: km(centro, j)):
+            extra = get_service_time(actividades[j].servicio, servicios) + dist.minutos(
+                actividades[grupo[-1]].coordinates, actividades[j].coordinates
+            )
+            if minutos + extra <= tope_minutos:
+                grupo.append(j)
+                minutos += extra
+        restantes -= set(grupo)
+        grupos.append(grupo)
+    return grupos
 
 
 def _limite_solver(num_actividades: int) -> int:
@@ -303,14 +382,17 @@ def armar_cuadrillas(
     sedes: Dict[str, SedeOperativa],
     jornada: JornadaConfig,
     bases_permitidas: Optional[Dict[str, Set[str]]] = None,
+    con_pareja: Optional[Set[str]] = None,
 ) -> List[List[Tecnico]]:
     """Agrupa a los técnicos disponibles en cuadrillas de 1 o 2 personas.
 
     Las cuadrillas fijas (armadas a mano o que ya salen juntas en Metabase) se
     respetan. Con el resto, en cada base se forman las parejas que pide el
     trabajo de las OTs de 2 o más personas (asignando cada OT a la base más
-    cercana), descontando las parejas fijas de esa base.
+    cercana), descontando las parejas fijas de esa base. Los técnicos de
+    `con_pareja` (tienen fijada una OT de 2 personas) no salen solos.
     """
+    con_pareja = con_pareja or set()
     por_id = {t.id: t for t in tecnicos}
     cuadrillas = [[por_id[i] for i in grupo if i in por_id] for grupo in fijas]
     cuadrillas = [c for c in cuadrillas if c]
@@ -336,10 +418,13 @@ def armar_cuadrillas(
 
     max_minutos = int(jornada.horas_laborales * 60)
     for base, grupo in por_base.items():
+        # Quien no puede salir solo va primero, así queda en una pareja
+        grupo = [t for t in grupo if t.id in con_pareja] + [t for t in grupo if t.id not in con_pareja]
         # El 1,25 cubre los desplazamientos, igual que la estimación de cuadrillas de contratistas
         necesarias = math.ceil(minutos_pareja[base] * 1.25 / max_minutos)
         armadas = sum(1 for c in cuadrillas if len(c) >= 2 and c[0].base_id == base)
-        parejas = max(0, min(len(grupo) // 2, necesarias - armadas))
+        minimas = math.ceil(sum(1 for t in grupo if t.id in con_pareja) / 2)
+        parejas = max(0, min(len(grupo) // 2, max(necesarias - armadas, minimas)))
         cuadrillas += [grupo[2 * k:2 * k + 2] for k in range(parejas)]
         cuadrillas += [[t] for t in grupo[2 * parejas:]]
     return cuadrillas
@@ -388,7 +473,11 @@ def _asignar_inhouse(
     sedes = {s.id: s for s in request.sedes}
     bases_permitidas = bases_permitidas or {}
     libres = [a for a in actividades if a.codigo_bia not in fijas]
-    cuadrillas = armar_cuadrillas(tecnicos, request.cuadrillas, libres, sedes, request.jornada, bases_permitidas)
+    personas_de = {a.codigo_bia: a.personas_requeridas for a in actividades}
+    con_pareja = {t for codigo, t in fijas.items() if personas_de.get(codigo, 1) >= 2}
+    cuadrillas = armar_cuadrillas(
+        tecnicos, request.cuadrillas, libres, sedes, request.jornada, bases_permitidas, con_pareja
+    )
     cuadrilla_de = {t.id: v for v, c in enumerate(cuadrillas) for t in c}
     personas = [len(c) for c in cuadrillas]
     grupos = [c[0].base_id for c in cuadrillas]
@@ -421,9 +510,19 @@ def _asignar_inhouse(
         sum(request.uso_previo.get(t.id, 0) for t in c) / len(c) for c in cuadrillas
     ] if request.uso_previo else None
 
+    servicios = _tiempos_servicio(request.jornada)
+    tope_grupo = int(request.jornada.horas_laborales * 60 * FRACCION_GRUPO)
+    # OT → las otras OTs cercanas que van con ella en la misma ruta (para el motivo)
+    juntas: Dict[str, List[str]] = {}
+
     def resolver(indices: List[int], vehiculos: List[int]) -> Tuple[Dict[int, List[int]], List[int]]:
-        """Resuelve solo esas actividades con esas cuadrillas; índices sobre `atendibles`"""
+        """Resuelve solo esas actividades con esas cuadrillas; índices sobre `atendibles`.
+
+        Las OTs libres cercanas entre sí viajan como un solo punto, así las hace una sola
+        cuadrilla; si un grupo no cabe en ninguna, se separa y se vuelve a resolver.
+        """
         rutas = {v: [] for v in vehiculos}
+        juntas.clear()
         if not vehiculos:
             return rutas, list(indices)
         posicion = {v: k for k, v in enumerate(vehiculos)}
@@ -435,19 +534,47 @@ def _asignar_inhouse(
                 continue
             sub.append(i)
             sub_permitidos.append(lista if len(lista) < len(vehiculos) else None)
-        rutas_sub, descartadas_sub = _resolver_balanceado(
-            [atendibles[i] for i in sub],
-            [inicios[v] for v in vehiculos],
-            [grupos[v] for v in vehiculos],
-            request.jornada,
-            dist,
-            _limite_solver(len(sub)),
-            sub_permitidos,
-            {k for k, i in enumerate(sub) if i in fijadas},
-            [previos[v] for v in vehiculos] if previos else None,
+        acts = [atendibles[i] for i in sub]
+        fijas_sub = {k for k, i in enumerate(sub) if i in fijadas}
+        libres_sub = [k for k in range(len(sub)) if k not in fijas_sub]
+        claves = {k: tuple(sub_permitidos[k]) if sub_permitidos[k] is not None else None for k in libres_sub}
+        nodos = [[k] for k in sorted(fijas_sub)] + grupos_cercanos(
+            libres_sub, acts, claves, request.jornada.radio_grupo_km, tope_grupo, servicios, dist
         )
-        for k, ruta in enumerate(rutas_sub):
-            rutas[vehiculos[k]] = [sub[j] for j in ruta]
+        intentos = 2
+        for intento in range(intentos):
+            rutas_nodos, descartados = _resolver_balanceado(
+                [acts[nodo[0]] for nodo in nodos],
+                [inicios[v] for v in vehiculos],
+                [grupos[v] for v in vehiculos],
+                request.jornada,
+                dist,
+                _limite_solver(len(nodos)),
+                [sub_permitidos[nodo[0]] for nodo in nodos],
+                {n for n, nodo in enumerate(nodos) if nodo[0] in fijas_sub},
+                [previos[v] for v in vehiculos] if previos else None,
+                [_minutos_grupo(nodo, acts, servicios, dist) for nodo in nodos],
+            )
+            sueltos = [n for n in descartados if len(nodos[n]) > 1]
+            # En el último intento los grupos que no caben se quedan sin asignar enteros
+            if not sueltos or intento == intentos - 1:
+                break
+            nodos = [nodo for n, nodo in enumerate(nodos) if n not in sueltos] + [
+                [k] for n in sueltos for k in nodos[n]
+            ]
+        for k, ruta in enumerate(rutas_nodos):
+            orden: List[int] = []
+            punto = inicios[vehiculos[k]]
+            for n in ruta:
+                miembros = _orden_cercania(nodos[n], acts, punto, dist)
+                orden += miembros
+                punto = acts[miembros[-1]].coordinates
+                if len(miembros) > 1:
+                    codigos = [acts[j].codigo_bia for j in miembros]
+                    for codigo in codigos:
+                        juntas[codigo] = [c for c in codigos if c != codigo]
+            rutas[vehiculos[k]] = [sub[j] for j in orden]
+        descartadas_sub = [k for n in descartados for k in nodos[n]]
         return rutas, sin_cuadrilla + [sub[j] for j in descartadas_sub]
 
     todas = list(range(len(cuadrillas)))
@@ -496,6 +623,9 @@ def _asignar_inhouse(
         "cuadrillas_armadas": len(cuadrillas),
         "parejas": sum(1 for c in cuadrillas if len(c) >= 2),
         "cuadrillas_manuales": bool(request.cuadrillas),
+        "ots_agrupadas": len(juntas),
+        "radio_grupo_km": request.jornada.radio_grupo_km,
+        "juntas": dict(juntas),
     }
     return rutas, sin_asignar, extra
 
@@ -1006,6 +1136,10 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
             para_tecnicos, fijas_tecnico, tecnicos, request, dist, bases_permitidas
         )
         rutas += rutas_tecnicos
+        radio = request.jornada.radio_grupo_km
+        for codigo, otras in extra_tecnicos.pop("juntas", {}).items():
+            nombradas = ", ".join(otras[:MAX_NOMBRADAS]) + (f" y {len(otras) - MAX_NOMBRADAS} más" if len(otras) > MAX_NOMBRADAS else "")
+            _agregar_motivo(motivos_previos, codigo, f"Va junto con {nombradas}: están a {radio:g} km o menos")
         extra.update(extra_tecnicos)
         if request.modo == "inhouse":
             sin_asignar += sobrantes
@@ -1025,3 +1159,107 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
 
     extra["ots_sin_ubicacion"] = len(sin_ubicacion)
     return _resultado(request, rutas, recomendaciones, sin_asignar, extra, motivos_previos, fijadas, sin_ubicacion)
+
+
+def repartir_lote(request: AssignmentRequest, codigos: List[str]) -> Dict:
+    """Propuesta para un lote de OTs elegidas a mano.
+
+    Las que están a `radio_grupo_km` o menos entre sí (y las cubre el mismo equipo) forman un
+    grupo; cada grupo va al técnico disponible de ese equipo con la UTR más baja de la semana,
+    contando lo que ya tiene ese día y lo que le va tocando del lote. Primero los que todavía
+    caben en su jornada; los grupos más grandes se reparten primero.
+    """
+    sedes = {s.id: s for s in request.sedes}
+    tecnicos = [t for t in request.tecnicos if t.base_id in sedes]
+    dist = Distancias(request.jornada, request.matriz)
+    servicios = _tiempos_servicio(request.jornada)
+    jornada_min = int(request.jornada.horas_laborales * 60)
+    elegidas = set(codigos)
+
+    lote: List[Activity] = []
+    sin_ubicacion: List[str] = []
+    for actividad in request.actividades:
+        if actividad.codigo_bia not in elegidas:
+            continue
+        if actividad.coordinates is None and actividad.gps:
+            try:
+                actividad.parse_coordinates()
+            except ValueError:
+                pass
+        if actividad.coordinates is None:
+            sin_ubicacion.append(actividad.codigo_bia)
+        else:
+            lote.append(actividad)
+
+    # Lo que cada técnico ya tiene ese día fuera del lote (sus OTs fijadas)
+    hoy = {t.id: 0 for t in tecnicos}
+    for actividad in request.actividades:
+        tipo, _, destino = request.fijas.get(actividad.codigo_bia, "").partition(":")
+        if actividad.codigo_bia not in elegidas and tipo == "tecnico" and destino in hoy:
+            hoy[destino] += get_service_time(actividad.servicio, servicios)
+
+    bases_con_tecnicos = {t.base_id for t in tecnicos}
+    cubre: Dict[int, Set[str]] = {}
+    for k, actividad in enumerate(lote):
+        if request.coberturas:
+            cubre[k] = {c.base_id for c in _equipos_que_cubren(actividad, request)} & bases_con_tecnicos
+        else:
+            cubre[k] = set(bases_con_tecnicos)
+    claves = {k: tuple(sorted(b)) for k, b in cubre.items()}
+    grupos = grupos_cercanos(
+        list(range(len(lote))), lote, claves, request.jornada.radio_grupo_km,
+        int(jornada_min * FRACCION_GRUPO), servicios, dist,
+    )
+
+    disponible = request.disponible_previo + jornada_min
+    carga = {t.id: request.uso_previo.get(t.id, 0) + hoy[t.id] for t in tecnicos}
+    utr = lambda minutos: round(minutos / disponible, 4) if disponible else None
+    propuesta: List[Dict] = []
+    sin_tecnico: List[Dict] = []
+    for grupo in sorted(grupos, key=lambda g: -_minutos_grupo(g, lote, servicios, dist)):
+        codigos_grupo = [lote[k].codigo_bia for k in grupo]
+        centro = lote[grupo[0]].coordinates
+        candidatos = [t for t in tecnicos if t.base_id in cubre[grupo[0]]]
+        if not candidatos:
+            motivo = _fuera_de_cobertura(lote[grupo[0]], _equipos_que_cubren(lote[grupo[0]], request), request) \
+                if tecnicos else "No hay técnicos disponibles"
+            sin_tecnico += [{"codigo": c, "motivo": motivo} for c in codigos_grupo]
+            continue
+        trabajo = _minutos_grupo(grupo, lote, servicios, dist)
+
+        def minutos_de(t: Tecnico) -> int:
+            # Ida y vuelta desde su base al grupo, más el trabajo del grupo
+            return trabajo + 2 * dist.minutos(sedes[t.base_id].coordinates, centro)
+
+        orden = sorted(candidatos, key=lambda t: (
+            hoy[t.id] + minutos_de(t) > jornada_min, carga[t.id], dist.km(sedes[t.base_id].coordinates, centro),
+        ))
+        elegido = orden[0]
+        minutos = minutos_de(elegido)
+        cabe = hoy[elegido.id] + minutos <= jornada_min
+        antes = carga[elegido.id]
+        propuesta.append({
+            "codigos": codigos_grupo,
+            "tecnico_id": elegido.id,
+            "tecnico": elegido.nombre,
+            "minutos": minutos,
+            "km_max": round(max((dist.km(centro, lote[k].coordinates) for k in grupo[1:]), default=0), 1),
+            "personas": max(lote[k].personas_requeridas for k in grupo),
+            "cabe": cabe,
+            "utr_antes": utr(antes),
+            "utr_despues": utr(antes + minutos),
+            "opciones": [
+                {"tecnico_id": t.id, "tecnico": t.nombre, "utr": utr(carga[t.id]),
+                 "cabe": hoy[t.id] + minutos_de(t) <= jornada_min}
+                for t in orden
+            ],
+        })
+        carga[elegido.id] += minutos
+        hoy[elegido.id] += minutos
+
+    return {
+        "radio_km": request.jornada.radio_grupo_km,
+        "grupos": propuesta,
+        "sin_tecnico": sin_tecnico,
+        "sin_ubicacion": sin_ubicacion,
+    }

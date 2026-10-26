@@ -194,6 +194,7 @@ const AssignmentPanel = forwardRef(({
         velocidad_promedio_kmh: values.velocidad_promedio_kmh,
         factor_vial: values.factor_vial,
         radio_inhouse_km: values.radio_inhouse_km,
+        radio_grupo_km: values.radio_grupo_km ?? 2,
         capacidad_maxima_actividades: values.capacidad_maxima_actividades || null,
         incluir_retorno: values.incluir_retorno,
         tiempos_servicio: tipos.map((s) => ({ servicio: s, duracion_minutos: otTypeSettings(s, config.tipos_ot).minutos })),
@@ -580,6 +581,7 @@ const AssignmentPanel = forwardRef(({
           velocidad_promedio_kmh: 30,
           factor_vial: 1.3,
           radio_inhouse_km: 40,
+          radio_grupo_km: 2,
           capacidad_maxima_actividades: null,
           incluir_retorno: true,
         }}
@@ -596,6 +598,13 @@ const AssignmentPanel = forwardRef(({
           </Form.Item>
           <Form.Item label="Volver a la base" name="incluir_retorno" valuePropName="checked">
             <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Juntar OTs a (km)"
+            name="radio_grupo_km"
+            tooltip="Las OTs a esta distancia o menos por carretera van al mismo técnico (el de UTR más baja); 0 = no juntar"
+          >
+            <InputNumber min={0} max={20} step={0.5} />
           </Form.Item>
           <Form.Item
             label="Radio técnicos (km)"

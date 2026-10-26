@@ -24,7 +24,7 @@ from shared.config import settings
 from shared.utils import setup_logging, get_service_time
 from .service import OptimizationService
 from .proximity_analysis import ProximityAnalysisService
-from .assignment import asignar
+from .assignment import asignar, repartir_lote
 
 # Setup logging
 logger = setup_logging("optimizer-service", settings.LOG_LEVEL)
@@ -388,6 +388,21 @@ async def assign_activities(request: AssignmentRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Assignment error: {str(e)}"
         )
+
+
+
+class LotePedido(BaseModel):
+    pedido: AssignmentRequest
+    codigos: List[str]
+
+
+@app.post("/lote", response_model=dict)
+async def lote(request: LotePedido):
+    """Propuesta para un lote: OTs cercanas juntas, cada grupo al técnico con la UTR más baja"""
+    try:
+        return repartir_lote(request.pedido, request.codigos)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 if __name__ == "__main__":

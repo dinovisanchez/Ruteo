@@ -75,6 +75,15 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       render: (_, a) => [a.asignado_a, a.contratista_asignado].filter(Boolean).join(' · '),
     },
     {
+      title: 'Creada por',
+      width: 190,
+      ellipsis: true,
+      sorter: (a, b) => (a.creado_por || '~').localeCompare(b.creado_por || '~'),
+      filters: columnFilters(ots, (a) => a.creado_por),
+      onFilter: (value, a) => a.creado_por === value,
+      render: (_, a) => [a.creado_por, a.fecha_creacion && dayjs(a.fecha_creacion).format('D MMM')].filter(Boolean).join(' · '),
+    },
+    {
       title: 'OR',
       dataIndex: 'or_operador',
       width: 110,

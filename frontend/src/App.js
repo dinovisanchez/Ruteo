@@ -10,10 +10,12 @@ import dayjs from 'dayjs';
 
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
+import LoteBar, { POR_CERCANIA } from './components/LoteBar';
+import LoteModal from './components/LoteModal';
 import OtsTable from './components/OtsTable';
 import UtilizationDashboard from './components/UtilizationDashboard';
 import {
-  assignActivities, getCatalog, getUtilization, getZones,
+  assignActivities, getCatalog, getUtilization, getZones, proposeBatch,
 } from './services/api';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
@@ -68,7 +70,7 @@ const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 // Everything the name search looks at
 const searchText = (codigo, actividad, responsable) => normalizeText([
   codigo, actividad?.nombre, actividad?.direccion, actividad?.ciudad, actividad?.servicio, actividad?.or_operador,
-  responsable, actividad?.asignado_a, actividad?.contratista_asignado,
+  responsable, actividad?.asignado_a, actividad?.contratista_asignado, actividad?.creado_por,
 ].filter(Boolean).join(' '));
 
 // "Asignado a" options: every Bia technician, plus the contractors and externals with OTs in the plan
@@ -149,10 +151,16 @@ function App() {
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
   const [panelState, setPanelState] = useState({ canExtract: false, fetching: false, autoRefresh: false });
+  // OTs selected in the list to assign together, and the proposal "by proximity" for them
+  const [seleccion, setSeleccion] = useState([]);
+  const [propuesta, setPropuesta] = useState(null);
+  const [loteOcupado, setLoteOcupado] = useState(false);
   const [actualizado, setActualizado] = useState(null);
   const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
   const baseRef = useRef(null);
+  // Exactly what was sent for the current plan (week load, road times...), for the batch proposal
+  const ultimoPedidoRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -218,7 +226,8 @@ function App() {
       } else {
         setUtrSemana({});
       }
-      let assignment = await assignActivities(request);
+      let pedido = request;
+      let assignment = await assignActivities(pedido);
       // The backend could not reach the road server: the browser asks for the road times and the plan is redone
       if (!assignment.metricas.tiempos_por_vias) {
         message.loading({ content: 'Consultando tiempos por carretera desde el navegador...', key: 'assign', duration: 0 });
@@ -229,8 +238,12 @@ function App() {
             .map((a) => [a.coordinates.latitude, a.coordinates.longitude]),
         ];
         const matriz = await matrizPorVias(puntos);
-        if (matriz) assignment = await assignActivities({ ...request, matriz });
+        if (matriz) {
+          pedido = { ...request, matriz };
+          assignment = await assignActivities(pedido);
+        }
       }
+      ultimoPedidoRef.current = pedido;
       setResult(assignment);
       setIncluirRetorno(request.jornada.incluir_retorno);
       setAssignedCodes(codesKey(base.actividades));
@@ -270,6 +283,7 @@ function App() {
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
+    setSeleccion([]);
     // Choosing a day goes back to that day's plan
     setEstado((actual) => (actual === 'backlog' ? 'pendientes' : actual));
     if (baseRef.current) handleAssign(baseRef.current, { dia: nuevo });
@@ -282,6 +296,54 @@ function App() {
     else next[codigo] = value;
     setFijas(next);
     if (baseRef.current) handleAssign(baseRef.current, { fijas: next });
+  };
+
+  // After assigning a batch, the map shows the route of whoever received it
+  const verRutas = (valores) => {
+    if (!valores.length) return;
+    setAsignadoA(valores);
+    setEstado('todas');
+    setDestino(null);
+    setVista('mapa');
+  };
+
+  // The selected OTs all to one destination, or a proposal by proximity
+  const aplicarLote = async (valor) => {
+    if (!baseRef.current || !seleccion.length) return;
+    if (valor === POR_CERCANIA) {
+      setLoteOcupado(true);
+      try {
+        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos: seleccion }));
+      } catch (error) {
+        message.error(`No se pudo armar la propuesta: ${error.message}`);
+      } finally {
+        setLoteOcupado(false);
+      }
+      return;
+    }
+    const situaciones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion]));
+    const next = { ...fijas };
+    seleccion.forEach((codigo) => {
+      // "Que decida la app" on a pending OT is the same as no edit
+      if (valor === 'auto' && situaciones[codigo] !== 'asignada') delete next[codigo];
+      else next[codigo] = valor;
+    });
+    const [tipo, id] = valor.split(':');
+    const nombre = tipo === 'tecnico' ? config.tecnicos.find((t) => t.id === id)?.nombre
+      : catalog.empresas.find((e) => e.id === id)?.nombre;
+    setFijas(next);
+    setSeleccion([]);
+    await handleAssign(baseRef.current, { fijas: next });
+    if (nombre) verRutas([`${tipo === 'tecnico' ? 't' : 'c'}:${nombre}`]);
+  };
+
+  const confirmarCercania = async (asignaciones, tecnicosElegidos) => {
+    const next = { ...fijas, ...asignaciones };
+    setFijas(next);
+    setPropuesta(null);
+    setSeleccion([]);
+    await handleAssign(baseRef.current, { fijas: next });
+    verRutas([...new Set(tecnicosElegidos.filter(Boolean))].map((n) => `t:${n}`));
   };
 
   const clearEdits = () => {
@@ -514,7 +576,7 @@ function App() {
                   allowClear
                   variant="filled"
                   prefix={<SearchOutlined />}
-                  placeholder="Buscar por nombre, OT o dirección"
+                  placeholder="Buscar por nombre, OT, dirección o quién la creó"
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
                   className="filter-search"
@@ -575,6 +637,8 @@ function App() {
                 optionFilterProp="label"
                 popupMatchSelectWidth={false}
                 className="filter-assignee"
+                // It grows with the people chosen, so their names show instead of "+ 2 ..."
+                style={{ width: asignadoA.length ? Math.min(460, 140 + asignadoA.length * 150) : 180 }}
               />
               {filtrosActivos && (
                 <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); }} style={{ paddingInline: 4 }}>
@@ -641,6 +705,8 @@ function App() {
                     if (nuevoDestino !== undefined) setDestino(nuevoDestino);
                   }}
                   fijas={fijas}
+                  seleccion={seleccion}
+                  onSeleccion={vista === 'lista' && !backlog ? setSeleccion : undefined}
                   onEdit={handleEdit}
                   tecnicos={tecnicosEdicion}
                   empresas={catalog.empresas}
@@ -648,6 +714,23 @@ function App() {
                 />
               ) : <EmptyState />)}
             </Spin>
+            {vista === 'lista' && !backlog && seleccion.length > 0 && (
+              <LoteBar
+                cantidad={seleccion.length}
+                tecnicos={tecnicosEdicion}
+                empresas={catalog.empresas}
+                onAplicar={aplicarLote}
+                onLimpiar={() => setSeleccion([])}
+                ocupado={loteOcupado || loading}
+              />
+            )}
+            <LoteModal
+              propuesta={propuesta}
+              actividades={actividades}
+              onCancelar={() => setPropuesta(null)}
+              onAplicar={confirmarCercania}
+              ocupado={loading}
+            />
           </Content>
         </Layout>
       </Layout>

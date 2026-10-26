@@ -42,6 +42,9 @@ class Activity(BaseModel):
     asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
     electricista_id: Optional[str] = None  # Id del electricista responsable en Olibia
     contratista_asignado: Optional[str] = None
+    # Quién creó la OT y cuándo (YYYY-MM-DD), si la pregunta lo trae
+    creado_por: Optional[str] = None
+    fecha_creacion: Optional[str] = None
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""
@@ -513,6 +516,8 @@ class JornadaConfig(BaseModel):
     factor_vial: float = Field(default=1.3, ge=1.0, le=3.0)
     # Sin coberturas por equipo: en modo automático, las OTs más lejos que esto de toda base Bia van a contratistas
     radio_inhouse_km: float = Field(default=40.0, gt=0)
+    # OTs a esta distancia o menos (por carretera) van juntas a una sola cuadrilla; 0 = no agrupar
+    radio_grupo_km: float = Field(default=2.0, ge=0, le=20)
     capacidad_maxima_actividades: Optional[int] = Field(default=None, gt=0)
     incluir_retorno: bool = True
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
