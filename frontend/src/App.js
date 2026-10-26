@@ -301,6 +301,8 @@ function App() {
   // After assigning a batch, the map shows the route of whoever received it
   const verRutas = (valores) => {
     if (!valores.length) return;
+    // The whole route of those people, not only the OTs the search had found
+    setBusqueda('');
     setAsignadoA(valores);
     setEstado('todas');
     setDestino(null);
