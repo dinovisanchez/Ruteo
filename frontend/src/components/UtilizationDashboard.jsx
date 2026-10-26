@@ -73,6 +73,7 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
         tecnicos_ids: r.responsable_id.split('+'),
         servicio_min: r.ruta.tiempo_trabajo_minutos,
         viaje_min: r.ruta.tiempo_desplazamiento_minutos,
+        km: r.ruta.distancia_total_km,
         codigos: r.ruta.paradas.map((p) => p.actividad.codigo_bia),
       })),
     } : null;
@@ -103,6 +104,7 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
   const usado = tecnicos.reduce((s, t) => s + t.usado_min, 0);
   const disponible = tecnicos.reduce((s, t) => s + t.disponible_min, 0);
   const totalOts = tecnicos.reduce((s, t) => s + t.ots, 0);
+  const totalKm = tecnicos.reduce((s, t) => s + (t.km || 0), 0);
   const diasConOts = tecnicos.reduce((s, t) => s + t.dias_con_ots, 0);
   const porDia = (datos?.por_dia || []).map((d) => {
     const usadoDia = tecnicos.reduce((s, t) => s + t.dias.filter((x) => x.fecha === d.fecha)
@@ -135,6 +137,7 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
         ? <Tooltip title="Algunas OTs no tienen ubicación: su viaje se estimó con el promedio del día">{horas(t.viaje_min)}*</Tooltip>
         : horas(t.viaje_min)),
     },
+    { title: 'Km', width: 80, align: 'right', render: (_, t) => (t.km || 0).toLocaleString('es-CO', { maximumFractionDigits: 0 }) },
     { title: 'Usadas', width: 90, align: 'right', render: (_, t) => <strong>{horas(t.usado_min)}</strong> },
     { title: 'Disponibles', width: 100, align: 'right', render: (_, t) => horas(t.disponible_min) },
     {
@@ -150,7 +153,7 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
     <div className="day-breakdown">
       {t.dias.length ? t.dias.map((d) => (
         <span key={d.fecha}>
-          {capitalizar(dayjs(d.fecha).format('ddd D'))}: {d.ots} OTs · {horas(d.servicio_min + d.viaje_min)}
+          {capitalizar(dayjs(d.fecha).format('ddd D'))}: {d.ots} OTs · {horas(d.servicio_min + d.viaje_min)} · {Math.round(d.km || 0)} km
           {d.plan ? ' (plan)' : ''}
         </span>
       )) : 'Sin OTs en el periodo'}
@@ -205,6 +208,10 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
         <div className="kpi static">
           <span className="kpi-title">OTs por técnico al día</span>
           <span className="kpi-value">{diasConOts ? (totalOts / diasConOts).toLocaleString('es-CO', { maximumFractionDigits: 1 }) : '—'}</span>
+        </div>
+        <div className="kpi static">
+          <span className="kpi-title">Km recorridos</span>
+          <span className="kpi-value">{totalKm.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</span>
         </div>
         <div className="kpi static">
           <span className="kpi-title">Viaje / horas usadas</span>

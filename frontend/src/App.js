@@ -20,6 +20,17 @@ import './App.css';
 const { Header, Content, Sider } = Layout;
 
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
+
+/**
+ * Whether an OT belongs to the plan of `dia`: assigned ones on their visit date; pending ones on their
+ * visit date too (or today, if that date already passed and it is still pending); undated ones any day.
+ * Assigned without a date also travel, so the server can report them.
+ */
+const entraEnElDia = (a, dia, hoy) => {
+  if (!a.fecha_visita) return true;
+  if (a.fecha_visita === dia) return true;
+  return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
+};
 const ISO_DAY = 'YYYY-MM-DD';
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -109,7 +120,7 @@ function App() {
     // (the history used for utilization stays in the browser)
     const request = {
       ...base,
-      actividades: base.actividades.filter((a) => a.situacion !== 'asignada' || !a.fecha_visita || a.fecha_visita === diaPlan),
+      actividades: base.actividades.filter((a) => entraEnElDia(a, diaPlan, dayjs().format(ISO_DAY))),
       dia: diaPlan,
       fijas: overrides.fijas ?? fijas,
     };
@@ -175,23 +186,45 @@ function App() {
   }, [ots, result]);
 
   const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino);
+  // Whether a decision passes the filters; the counts can leave out the status or destination filter
+  const pasaFiltros = useCallback((d, { porEstado = true, porDestino = true } = {}) => {
+    const texto = normalizeText(busqueda.trim());
+    return (!porEstado || estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+      && (!porDestino || !destino || d.enviar_a === destino)
+      && matchesAssignee(d, asignadoA)
+      && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto));
+  }, [busqueda, estado, destino, asignadoA, actividades]);
+
   const visibles = useMemo(() => {
     if (!result || !filtrosActivos) return null;
-    const texto = normalizeText(busqueda.trim());
-    return new Set(result.decisiones.filter((d) => (
-      (estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
-      && (!destino || d.enviar_a === destino)
-      && matchesAssignee(d, asignadoA)
-      && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto))
-    )).map((d) => d.codigo_bia));
-  }, [result, filtrosActivos, busqueda, estado, destino, asignadoA, actividades]);
+    return new Set(result.decisiones.filter((d) => pasaFiltros(d)).map((d) => d.codigo_bia));
+  }, [result, filtrosActivos, pasaFiltros]);
+
+  // Each tile counts the OTs of the selected people/search; it ignores only its own filter,
+  // so "Por asignar" still shows how many are pending while "Asignadas" is selected
+  const conteos = useMemo(() => {
+    if (!result) return null;
+    const sinEstado = result.decisiones.filter((d) => pasaFiltros(d, { porEstado: false }));
+    const sinDestino = result.decisiones.filter((d) => pasaFiltros(d, { porDestino: false }));
+    const cuantas = (lista, campo, valor) => lista.filter((d) => d[campo] === valor).length;
+    return {
+      total: result.decisiones.filter((d) => pasaFiltros(d, { porEstado: false, porDestino: false })).length,
+      todas: sinEstado.length,
+      asignada: cuantas(sinEstado, 'situacion', 'asignada'),
+      pendiente: cuantas(sinEstado, 'situacion', 'pendiente'),
+      tecnico: cuantas(sinDestino, 'enviar_a', 'tecnico'),
+      contratista: cuantas(sinDestino, 'enviar_a', 'contratista'),
+      externo: cuantas(sinDestino, 'enviar_a', 'externo'),
+      sin_asignar: cuantas(sinDestino, 'enviar_a', 'sin_asignar'),
+    };
+  }, [result, pasaFiltros]);
 
   // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
   const otsFiltradas = useMemo(() => {
     const texto = normalizeText(busqueda.trim());
     const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
     return (ots || []).filter((a) => (
-      (a.situacion !== 'asignada' || a.fecha_visita === dia)
+      entraEnElDia(a, dia, dayjs().format(ISO_DAY))
       && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
       && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
       && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
@@ -205,8 +238,6 @@ function App() {
   const tecnicosEdicion = config.tecnicos
     .filter((t) => t.activo !== false)
     .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id) }));
-  const decisiones = result?.decisiones || [];
-  const cuenta = (situacion) => decisiones.filter((d) => d.situacion === situacion).length;
   const ediciones = Object.keys(fijas).length;
   const hoy = dayjs().format(ISO_DAY);
 
@@ -337,9 +368,9 @@ function App() {
                 value={estado}
                 onChange={setEstado}
                 options={[
-                  { value: 'todas', label: `Todas${result ? ` ${decisiones.length}` : ''}` },
-                  { value: 'pendientes', label: `Por asignar${result ? ` ${cuenta('pendiente')}` : ''}` },
-                  { value: 'asignadas', label: `Asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
+                  { value: 'todas', label: `Todas${conteos ? ` ${conteos.todas}` : ''}` },
+                  { value: 'pendientes', label: `Por asignar${conteos ? ` ${conteos.pendiente}` : ''}` },
+                  { value: 'asignadas', label: `Asignadas${conteos ? ` ${conteos.asignada}` : ''}` },
                 ]}
               />
               )}
@@ -403,6 +434,7 @@ function App() {
                   incluirRetorno={incluirRetorno}
                   view={vista}
                   visibles={visibles}
+                  conteos={conteos}
                   horasDia={capacidad.horasSemana / capacidad.diasSemana}
                   estado={estado}
                   destino={destino}

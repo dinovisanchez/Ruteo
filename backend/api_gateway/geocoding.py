@@ -7,7 +7,7 @@ import asyncio
 from datetime import date
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import httpx
 
@@ -24,7 +24,12 @@ USER_AGENT = "Ruteo-Bia/1.0"
 PAUSA_SEGUNDOS = 1.1
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "geocache.json"
 
+# Direcciones que se buscan en segundo plano después de cada extracción (Nominatim: 1 por segundo)
+MAX_SEGUNDO_PLANO = 200
+
 _cache: Optional[Dict[str, Optional[List[float]]]] = None
+_refinando = False
+_tareas: Set["asyncio.Task"] = set()
 
 
 def _leer_cache() -> Dict[str, Optional[List[float]]]:
@@ -44,15 +49,11 @@ def _guardar_cache() -> None:
     temporal.replace(CACHE_PATH)
 
 
-def _consultas(actividad: Activity) -> List[str]:
-    """Primero la dirección completa; si no aparece, el municipio (ubicación aproximada)"""
+def _consultas(actividad: Activity) -> Tuple[Optional[str], Optional[str]]:
+    """(dirección completa, municipio): la segunda es el respaldo, con ubicación aproximada"""
     municipio = ", ".join(p.strip() for p in [actividad.ciudad, actividad.departamento, "Colombia"] if p and p.strip())
-    consultas = []
-    if actividad.direccion.strip():
-        consultas.append(f"{actividad.direccion.strip()}, {municipio}")
-    if actividad.ciudad.strip():
-        consultas.append(municipio)
-    return consultas
+    direccion = f"{actividad.direccion.strip()}, {municipio}" if actividad.direccion.strip() else None
+    return direccion, (municipio if actividad.ciudad.strip() else None)
 
 
 async def _buscar(client: httpx.AsyncClient, consulta: str) -> Optional[GPSCoordinates]:
@@ -69,14 +70,47 @@ async def _buscar(client: httpx.AsyncClient, consulta: str) -> Optional[GPSCoord
     return GPSCoordinates(latitude=lat, longitude=lon) if validate_gps_colombia(lat, lon)[0] else None
 
 
-async def geocodificar(actividades: List[Activity]) -> Tuple[int, List[str]]:
-    """Completa las coordenadas de las OTs sin GPS a partir de su dirección o municipio.
+def _ubicar(actividad: Activity, coords: List[float]) -> None:
+    actividad.coordinates = GPSCoordinates(latitude=coords[0], longitude=coords[1])
+    actividad.gps = f"{coords[0]},{coords[1]}"
+    actividad.coordenadas_aproximadas = True
 
-    Modifica las actividades en sitio y las marca como aproximadas. Respeta el
-    límite de consultas por llamada; las que quedan pendientes se resuelven en
-    las siguientes (el caché guarda lo ya buscado). Devuelve (geocodificadas, avisos).
+
+async def _refinar(consultas: List[str]) -> None:
+    """Busca en segundo plano las direcciones que faltan; quedan en el caché para la próxima extracción"""
+    global _refinando
+    cache = _leer_cache()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for numero, consulta in enumerate(consultas, start=1):
+                clave = normalizar_texto(consulta)
+                if clave in cache:
+                    continue
+                await asyncio.sleep(PAUSA_SEGUNDOS)
+                try:
+                    coords = await _buscar(client, consulta)
+                except httpx.HTTPError as e:
+                    logger.warning(f"Geocodificación en segundo plano detenida: {e}")
+                    break
+                cache[clave] = [coords.latitude, coords.longitude] if coords else None
+                if numero % 20 == 0:
+                    _guardar_cache()
+    finally:
+        _guardar_cache()
+        _refinando = False
+
+
+async def geocodificar(actividades: List[Activity]) -> Tuple[int, List[str]]:
+    """Ubica las OTs sin GPS: por dirección si ya se conoce y, si no, por su municipio.
+
+    Los municipios son pocos y se buscan enseguida, así ninguna OT se queda sin ubicación.
+    Con el resto del cupo de consultas se buscan las direcciones de las OTs más importantes
+    (pendientes y de hoy en adelante); las demás se buscan en segundo plano y quedan en el
+    caché para la próxima extracción. Todas se marcan como aproximadas.
+    Devuelve (ubicadas, avisos).
     """
-    pendientes = [a for a in actividades if a.coordinates is None and _consultas(a)]
+    global _refinando
+    pendientes = [a for a in actividades if a.coordinates is None and any(_consultas(a))]
     if not pendientes or not settings.GEOCODING_ENABLED:
         return 0, []
     # Primero las que entran al plan (pendientes y asignadas de hoy en adelante); el historial después
@@ -84,47 +118,64 @@ async def geocodificar(actividades: List[Activity]) -> Tuple[int, List[str]]:
     pendientes.sort(key=lambda a: 0 if a.situacion == "pendiente" else (1 if (a.fecha_visita or "") >= hoy else 2))
 
     cache = _leer_cache()
-    resueltas = 0
-    consultas_red = 0
     avisos: List[str] = []
     cambio_cache = False
+
+    def aplicar_cache(actividad: Activity) -> bool:
+        """Ubica la OT con lo que ya está en el caché: dirección primero, municipio después"""
+        direccion, municipio = _consultas(actividad)
+        for consulta in (direccion, municipio):
+            if consulta and cache.get(normalizar_texto(consulta)):
+                _ubicar(actividad, cache[normalizar_texto(consulta)])
+                return consulta == direccion
+        return False
+
+    exactas = {id(a) for a in pendientes if aplicar_cache(a)}
+    municipios = list(dict.fromkeys(
+        m for a in pendientes if a.coordinates is None
+        for m in [_consultas(a)[1]] if m and normalizar_texto(m) not in cache
+    ))
+    direcciones = list(dict.fromkeys(
+        d for a in pendientes if id(a) not in exactas
+        for d in [_consultas(a)[0]] if d and normalizar_texto(d) not in cache
+    ))
+
+    consultas_red = 0
     red_disponible = True
-
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for actividad in pendientes:
-            for consulta in _consultas(actividad):
-                clave = normalizar_texto(consulta)
-                if clave not in cache:
-                    if not red_disponible or consultas_red >= settings.GEOCODING_MAX_POR_CONSULTA:
-                        break
-                    if consultas_red:
-                        await asyncio.sleep(PAUSA_SEGUNDOS)
-                    consultas_red += 1
-                    try:
-                        coords = await _buscar(client, consulta)
-                    except httpx.HTTPError as e:
-                        avisos.append(f"No se pudo geocodificar (Nominatim no respondió): {e}")
-                        red_disponible = False
-                        break
-                    cache[clave] = [coords.latitude, coords.longitude] if coords else None
-                    cambio_cache = True
-                if cache[clave]:
-                    lat, lon = cache[clave]
-                    actividad.coordinates = GPSCoordinates(latitude=lat, longitude=lon)
-                    actividad.gps = f"{lat},{lon}"
-                    actividad.coordenadas_aproximadas = True
-                    resueltas += 1
-                    break
-
+        for consulta in municipios + direcciones:
+            if consultas_red >= settings.GEOCODING_MAX_POR_CONSULTA:
+                break
+            if consultas_red:
+                await asyncio.sleep(PAUSA_SEGUNDOS)
+            consultas_red += 1
+            try:
+                coords = await _buscar(client, consulta)
+            except httpx.HTTPError as e:
+                avisos.append(f"No se pudo geocodificar (Nominatim no respondió): {e}")
+                red_disponible = False
+                break
+            cache[normalizar_texto(consulta)] = [coords.latitude, coords.longitude] if coords else None
+            cambio_cache = True
+    for actividad in pendientes:
+        aplicar_cache(actividad)
     if cambio_cache:
         _guardar_cache()
-    sin_resolver = [a for a in pendientes if a.coordinates is None]
-    no_encontradas = sum(1 for a in sin_resolver if all(normalizar_texto(c) in cache for c in _consultas(a)))
-    if no_encontradas:
-        avisos.append(f"{no_encontradas} OTs sin GPS no se encontraron ni por dirección ni por municipio")
-    if len(sin_resolver) > no_encontradas:
+
+    faltan = [d for d in direcciones if normalizar_texto(d) not in cache]
+    if faltan and red_disponible and not _refinando:
+        _refinando = True
+        tarea = asyncio.get_running_loop().create_task(_refinar(faltan[:MAX_SEGUNDO_PLANO]))
+        _tareas.add(tarea)
+        tarea.add_done_callback(_tareas.discard)
+
+    ubicadas = sum(1 for a in pendientes if a.coordinates is not None)
+    sin_ubicar = len(pendientes) - ubicadas
+    if faltan:
         avisos.append(
-            f"{len(sin_resolver) - no_encontradas} OTs sin GPS quedan pendientes de geocodificar; "
-            "vuelve a traer las OTs para continuar"
+            f"{len(faltan)} OTs están ubicadas por su municipio mientras se busca la dirección exacta; "
+            "vuelve a extraer en unos minutos para precisarlas"
         )
-    return resueltas, avisos
+    if sin_ubicar:
+        avisos.append(f"{sin_ubicar} OTs sin GPS no se encontraron ni por dirección ni por municipio")
+    return ubicadas, avisos

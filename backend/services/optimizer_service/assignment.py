@@ -718,6 +718,7 @@ def _decisiones(
     sin_asignar: List[ActividadSinAsignar],
     motivos_previos: Dict[str, str],
     fijadas: Set[str],
+    sin_ubicacion: Optional[List[DecisionOT]] = None,
 ) -> List[DecisionOT]:
     """Una decisión por OT: a quién enviarla y por qué, en el orden en que llegaron"""
     dist = Distancias(request.jornada, request.matriz)
@@ -750,6 +751,9 @@ def _decisiones(
                 hora_llegada=parada.hora_llegada_estimada,
                 motivo=motivo,
             )
+
+    for decision in sin_ubicacion or []:
+        decisiones[decision.codigo_bia] = decision
 
     for item in sin_asignar:
         decisiones[item.actividad.codigo_bia] = DecisionOT(
@@ -786,6 +790,7 @@ def _resultado(
     extra: Dict,
     motivos_previos: Dict[str, str],
     fijadas: Set[str],
+    sin_ubicacion: Optional[List[DecisionOT]] = None,
 ) -> AssignmentResult:
     distancia = round(sum(r.ruta.distancia_total_km for r in rutas), 2)
     asignadas = sum(len(r.ruta.paradas) for r in rutas)
@@ -809,7 +814,7 @@ def _resultado(
         modo=request.modo,
         total_actividades=len(request.actividades),
         rutas=rutas,
-        decisiones=_decisiones(request, rutas, recomendaciones, sin_asignar, motivos_previos, fijadas),
+        decisiones=_decisiones(request, rutas, recomendaciones, sin_asignar, motivos_previos, fijadas, sin_ubicacion),
         recomendaciones=recomendaciones,
         sin_asignar=sin_asignar,
         distancia_total_km=distancia,
@@ -860,13 +865,37 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
     empresas = {s.empresa_id for s in request.sedes if s.tipo == "contratista"}
     dist = Distancias(request.jornada, request.matriz)
 
-    actividades, sin_asignar = _separar_sin_coordenadas(
+    actividades, sin_coordenadas = _separar_sin_coordenadas(
         [a for a in request.actividades if a.codigo_bia not in request.externas]
     )
     motivos_previos: Dict[str, str] = {}
     fijas_tecnico: Dict[str, str] = {}
     fijas_empresa: Dict[str, str] = {}
     fijadas: Set[str] = set()
+
+    # Sin ubicación no hay ruta posible, pero la OT fijada a alguien sigue siendo de esa persona
+    sin_asignar: List[ActividadSinAsignar] = []
+    sin_ubicacion: List[DecisionOT] = []
+    nombre_tecnico = {t.id: t.nombre for t in tecnicos}
+    nombre_empresa = {s.empresa_id: s.empresa for s in request.sedes if s.tipo == "contratista"}
+    for item in sin_coordenadas:
+        codigo = item.actividad.codigo_bia
+        tipo, _, destino = request.fijas.get(codigo, "").partition(":")
+        if tipo == "tecnico" and destino in nombre_tecnico:
+            enviar_a, responsable = "tecnico", nombre_tecnico[destino]
+        elif tipo == "empresa" and destino in nombre_empresa:
+            enviar_a, responsable = "contratista", nombre_empresa[destino]
+        else:
+            sin_asignar.append(item)
+            continue
+        fijadas.add(codigo)
+        sin_ubicacion.append(DecisionOT(
+            codigo_bia=codigo,
+            enviar_a=enviar_a,
+            responsable_id=destino,
+            responsable=responsable,
+            motivo=f"Fijada a {responsable}. No tiene ubicación: no entra en la ruta ni en el mapa",
+        ))
     para_tecnicos: List[Activity] = []
     para_contratistas: List[Activity] = []
     libres: List[Activity] = []
@@ -962,4 +991,5 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
         rutas += rutas_contratistas
         extra.update(extra_contratistas)
 
-    return _resultado(request, rutas, recomendaciones, sin_asignar, extra, motivos_previos, fijadas)
+    extra["ots_sin_ubicacion"] = len(sin_ubicacion)
+    return _resultado(request, rutas, recomendaciones, sin_asignar, extra, motivos_previos, fijadas, sin_ubicacion)

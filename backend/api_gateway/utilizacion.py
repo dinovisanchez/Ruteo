@@ -32,6 +32,7 @@ class RutaPlan(BaseModel):
     tecnicos_ids: List[str]
     servicio_min: int
     viaje_min: int
+    km: float = 0
     codigos: List[str]
 
 
@@ -49,7 +50,8 @@ class UtilizacionRequest(BaseModel):
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
     transito: List[ZonaTransito] = Field(default_factory=list)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
-    # Si viene, ese día cuenta con el plan calculado (asignadas + sugeridas) en lugar de Metabase
+    # Si viene, ese día cada técnico cuenta con su ruta del plan (asignadas + sugeridas), más las
+    # OTs que Metabase le asigna y que la ruta no incluye (por ejemplo, sin ubicación)
     plan: Optional[PlanDelDia] = None
 
 
@@ -58,10 +60,10 @@ def minutos_de_viaje(
     base: Optional[GPSCoordinates],
     dist: Distancias,
     retorno: bool,
-) -> Tuple[int, bool]:
+) -> Tuple[int, float, bool]:
     """Desplazamiento del día: base → OTs (por hora de visita; si no hay, por cercanía) → base.
 
-    Las OTs sin ubicación suman el promedio de los demás tramos. Devuelve (minutos, estimado).
+    Las OTs sin ubicación suman el promedio de los demás tramos. Devuelve (minutos, km, estimado).
     """
     ubicadas = [a for a in ots if a.coordinates is not None]
     if any(a.hora_visita for a in ubicadas):
@@ -75,19 +77,20 @@ def minutos_de_viaje(
             posicion = siguiente.coordinates
 
     tramos: List[float] = []
+    kms: List[float] = []
     posicion = base
-    for actividad in orden:
+    destinos = [a.coordinates for a in orden] + ([base] if retorno and base is not None and orden else [])
+    for destino in destinos:
         if posicion is not None:
-            tramos.append(dist.minutos(posicion, actividad.coordinates))
-        posicion = actividad.coordinates
-    if retorno and base is not None and orden:
-        tramos.append(dist.minutos(posicion, base))
+            tramos.append(dist.minutos(posicion, destino))
+            kms.append(dist.km(posicion, destino))
+        posicion = destino
 
     sin_ubicacion = len(ots) - len(ubicadas)
     if sin_ubicacion:
-        promedio = sum(tramos) / len(tramos) if tramos else MINUTOS_VIAJE_SIN_UBICACION
-        tramos += [promedio] * sin_ubicacion
-    return int(round(sum(tramos))), sin_ubicacion > 0
+        tramos += [sum(tramos) / len(tramos) if tramos else MINUTOS_VIAJE_SIN_UBICACION] * sin_ubicacion
+        kms += [sum(kms) / len(kms) if kms else 0] * sin_ubicacion
+    return int(round(sum(tramos))), round(sum(kms), 1), sin_ubicacion > 0
 
 
 @router.post("/utilizacion", response_model=dict)
@@ -115,7 +118,7 @@ async def utilizacion(request: UtilizacionRequest):
     sin_registrar: Counter = Counter()
     for actividad in request.actividades:
         fecha = actividad.fecha_visita
-        if actividad.situacion != "asignada" or not fecha or not desde <= fecha <= hasta or fecha == dia_plan:
+        if actividad.situacion != "asignada" or not fecha or not desde <= fecha <= hasta:
             continue
         if actividad.coordinates is None and actividad.gps:
             try:
@@ -129,6 +132,9 @@ async def utilizacion(request: UtilizacionRequest):
             continue
         for tecnico in mencionados:
             carga.setdefault(tecnico.id, {}).setdefault(fecha, []).append(actividad)
+
+    def servicio_de(ots: List[Activity]) -> int:
+        return sum(get_service_time(a.servicio, servicios) for a in ots)
 
     # El día del plan, cada técnico cuenta con su ruta calculada (asignadas + sugeridas)
     plan: Dict[str, RutaPlan] = {}
@@ -149,18 +155,31 @@ async def utilizacion(request: UtilizacionRequest):
     for tecnico in tecnicos:
         base = sedes.get(tecnico.base_id)
         dias = []
-        for fecha, ots in sorted(carga.get(tecnico.id, {}).items()):
-            servicio = sum(get_service_time(a.servicio, servicios) for a in ots)
-            viaje, estimado = minutos_de_viaje(ots, base.coordinates if base else None, dist, jornada.incluir_retorno)
-            dias.append({"fecha": fecha, "ots": len(ots), "servicio_min": servicio, "viaje_min": viaje,
-                         "viaje_estimado": estimado, "plan": False})
-            ots_por_dia[fecha].update(a.codigo_bia for a in ots)
+        cargas = dict(carga.get(tecnico.id, {}))
         if tecnico.id in plan:
-            ruta = plan[tecnico.id]
-            dias.append({"fecha": dia_plan, "ots": len(ruta.codigos), "servicio_min": ruta.servicio_min,
-                         "viaje_min": ruta.viaje_min, "viaje_estimado": False, "plan": True})
-            ots_por_dia[dia_plan].update(ruta.codigos)
-            dias.sort(key=lambda d: d["fecha"])
+            cargas.setdefault(dia_plan, [])
+        for fecha, ots in sorted(cargas.items()):
+            if fecha == dia_plan and tecnico.id in plan:
+                ruta = plan[tecnico.id]
+                # Sus OTs de Metabase que la ruta no trae (sin ubicación): servicio + viaje promedio de la ruta
+                fuera = [a for a in ots if a.codigo_bia not in set(ruta.codigos)]
+                promedio = ruta.viaje_min / len(ruta.codigos) if ruta.codigos else MINUTOS_VIAJE_SIN_UBICACION
+                dias.append({
+                    "fecha": fecha,
+                    "ots": len(ruta.codigos) + len(fuera),
+                    "servicio_min": ruta.servicio_min + servicio_de(fuera),
+                    "viaje_min": int(round(ruta.viaje_min + promedio * len(fuera))),
+                    "km": round(ruta.km, 1),
+                    "viaje_estimado": bool(fuera),
+                    "plan": True,
+                })
+                ots_por_dia[fecha].update(ruta.codigos)
+                ots_por_dia[fecha].update(a.codigo_bia for a in fuera)
+                continue
+            viaje, km, estimado = minutos_de_viaje(ots, base.coordinates if base else None, dist, jornada.incluir_retorno)
+            dias.append({"fecha": fecha, "ots": len(ots), "servicio_min": servicio_de(ots), "viaje_min": viaje,
+                         "km": km, "viaje_estimado": estimado, "plan": False})
+            ots_por_dia[fecha].update(a.codigo_bia for a in ots)
         for d in dias:
             por_dia[d["fecha"]]["usado_min"] += d["servicio_min"] + d["viaje_min"]
 
@@ -173,6 +192,7 @@ async def utilizacion(request: UtilizacionRequest):
             "ots": sum(d["ots"] for d in dias),
             "servicio_min": sum(d["servicio_min"] for d in dias),
             "viaje_min": sum(d["viaje_min"] for d in dias),
+            "km": round(sum(d["km"] for d in dias), 1),
             "usado_min": usado,
             "disponible_min": round(disponible),
             "utr": round(usado / disponible, 4) if disponible else None,

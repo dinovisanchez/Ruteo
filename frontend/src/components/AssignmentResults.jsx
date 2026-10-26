@@ -174,7 +174,8 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 };
 
 const AssignmentResults = ({
-  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, estado = 'todas', destino = null, onFiltrar, horasDia = 8.4,
+  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
+  onFiltrar, horasDia = 8.4,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
@@ -203,30 +204,48 @@ const AssignmentResults = ({
   }));
   const rows = visibles ? allRows.filter((r) => visibles.has(r.decision.codigo_bia)) : allRows;
 
-  // Summary tiles: touching one filters the plan by it; touching it again removes that filter
+  // Routes with some OT that passes the filters: their km, hours and cost are the ones the tiles add up
+  const rutasVisibles = result.rutas
+    .map((r, idx) => ({ r, idx }))
+    .filter(({ r }) => !visibles || r.ruta.paradas.some((p) => visibles.has(p.actividad.codigo_bia)));
+  const kmVisibles = rutasVisibles.reduce((suma, { r }) => suma + r.ruta.distancia_total_km, 0);
+  const rutasTecnicos = rutasVisibles.filter(({ r }) => r.tipo === 'tecnico');
+  const horasTecnicos = rutasTecnicos.reduce((suma, { r }) => suma + r.ruta.tiempo_total_minutos, 0) / 60;
+  const costos = rutasTecnicos.map(({ r }) => r.costo).filter((c) => c !== null && c !== undefined);
+
+  // Summary tiles: they count what the filters select (the selected people, the search...);
+  // touching one filters by it and touching it again removes that filter
+  const c = conteos || {
+    total: result.total_actividades,
+    asignada: metricas.ots_ya_asignadas ?? 0,
+    pendiente: metricas.ots_pendientes ?? 0,
+    tecnico: metricas.ots_con_tecnicos,
+    contratista: metricas.ots_con_contratistas,
+    externo: metricas.ots_externas,
+    sin_asignar: metricas.ots_sin_asignar,
+  };
   const porEstado = (valor) => () => onFiltrar({ estado: estado === valor ? 'todas' : valor });
   const porDestino = (valor) => () => onFiltrar({ destino: destino === valor ? null : valor });
   const tiles = [
     {
       title: 'OTs del día',
-      value: result.total_actividades,
+      value: c.total,
       active: estado === 'todas' && !destino,
       onClick: () => onFiltrar({ estado: 'todas', destino: null }),
     },
-    { title: 'Asignadas', value: metricas.ots_ya_asignadas ?? 0, color: '#248A3D', active: estado === 'asignadas', onClick: porEstado('asignadas') },
-    { title: 'Por asignar', value: metricas.ots_pendientes ?? 0, color: '#C93400', active: estado === 'pendientes', onClick: porEstado('pendientes') },
-    { title: 'Técnicos Bia', value: metricas.ots_con_tecnicos, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
-    { title: 'Contratistas', value: metricas.ots_con_contratistas, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
+    { title: 'Asignadas', value: c.asignada, color: '#248A3D', active: estado === 'asignadas', onClick: porEstado('asignadas') },
+    { title: 'Por asignar', value: c.pendiente, color: '#C93400', active: estado === 'pendientes', onClick: porEstado('pendientes') },
+    { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
+    { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
     metricas.ots_externas
-      ? { title: 'Externas', value: metricas.ots_externas, active: destino === 'externo', onClick: porDestino('externo') }
+      ? { title: 'Externas', value: c.externo, active: destino === 'externo', onClick: porDestino('externo') }
       : null,
     metricas.ots_sin_asignar
-      ? { title: 'Sin asignar', value: metricas.ots_sin_asignar, color: '#FF3B30', active: destino === 'sin_asignar', onClick: porDestino('sin_asignar') }
+      ? { title: 'Sin asignar', value: c.sin_asignar, color: '#FF3B30', active: destino === 'sin_asignar', onClick: porDestino('sin_asignar') }
       : null,
-    { title: 'Km', value: km(result.distancia_total_km) },
-    metricas.costo_total !== null && metricas.costo_total !== undefined
-      ? { title: 'Costo técnicos', value: formatCop(metricas.costo_total) }
-      : null,
+    { title: 'Km', value: km(kmVisibles), hint: visibles ? 'De las rutas que muestra el filtro' : 'De todas las rutas del día' },
+    { title: 'Horas técnicos', value: horasTecnicos.toLocaleString('es-CO', { maximumFractionDigits: 1 }), hint: 'OTs + viaje de las rutas de técnicos mostradas' },
+    costos.length ? { title: 'Costo técnicos', value: formatCop(costos.reduce((a, b) => a + b, 0)) } : null,
   ].filter(Boolean);
   const transito = (metricas.transito || []).filter((z) => z.recargo_pct || z.minutos_extra)
     .map((z) => `${z.nombre} +${z.recargo_pct} %${z.minutos_extra ? ` +${z.minutos_extra} min` : ''}`).join(', ');
@@ -235,6 +254,8 @@ const AssignmentResults = ({
     metricas.tiempos_por_vias ? null : (metricas.aviso_vias || 'Tiempos estimados en línea recta'),
     metricas.asignadas_sin_fecha > 0 ? `${metricas.asignadas_sin_fecha} asignadas sin fecha en Metabase` : null,
     metricas.ots_sin_lista_or > 0 ? `${metricas.ots_sin_lista_or} OTs de OR sin contratistas en su zona` : null,
+    metricas.pendientes_otros_dias > 0 ? `${metricas.pendientes_otros_dias} pendientes tienen fecha de otro día` : null,
+    metricas.ots_sin_ubicacion > 0 ? `${metricas.ots_sin_ubicacion} OTs asignadas sin ubicación (no entran en el mapa)` : null,
     metricas.bia_sin_registrar?.length
       ? `Técnicos de Bia en Metabase que no están en la app: ${metricas.bia_sin_registrar.join(', ')} (agrégalos en Técnicos → Gestionar)`
       : null,
@@ -288,10 +309,6 @@ const AssignmentResults = ({
     },
   ];
 
-  const rutasVisibles = result.rutas
-    .map((r, idx) => ({ r, idx }))
-    .filter(({ r }) => !visibles || r.ruta.paradas.some((p) => visibles.has(p.actividad.codigo_bia)));
-
   return (
     <>
       <div className="kpi-row">
@@ -299,6 +316,7 @@ const AssignmentResults = ({
           <button
             key={t.title}
             type="button"
+            title={t.hint}
             className={`kpi${t.active ? ' active' : ''}${t.onClick ? '' : ' static'}`}
             aria-pressed={t.onClick ? t.active : undefined}
             disabled={!t.onClick || !onFiltrar}

@@ -652,7 +652,8 @@ body {
 }
 
 .utr-value {
-  width: 44px;
+  width: 52px;
+  white-space: nowrap;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

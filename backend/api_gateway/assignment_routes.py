@@ -238,7 +238,9 @@ def plan_del_dia(
 ) -> Tuple[List[Activity], Dict[str, str], Dict[str, str], Dict[str, str], List[List[str]], Dict]:
     """OTs del día y a quién quedan fijadas.
 
-    Entran las pendientes y las asignadas en Metabase para `dia`. Una asignada queda
+    Entran las asignadas en Metabase para `dia` y las pendientes de ese día: una pendiente con
+    fecha de visita entra ese día (o hoy, si la fecha ya pasó y sigue pendiente); sin fecha,
+    entra cualquier día. Una asignada queda
     fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
     si está en el catálogo, o como externa si su responsable no está en la app. Las
     ediciones a mano mandan sobre lo que dice Metabase.
@@ -252,16 +254,23 @@ def plan_del_dia(
     notas: Dict[str, str] = {}
     parejas: List[List[str]] = []
     sin_registrar: Dict[str, int] = {}
-    otros_dias = sin_fecha = 0
+    otros_dias = sin_fecha = pendientes_otros_dias = 0
+    hoy = date.today().isoformat()
 
     for actividad in actividades:
         codigo = actividad.codigo_bia
-        if actividad.situacion == "asignada" and actividad.fecha_visita != dia:
-            if actividad.fecha_visita:
+        fecha = actividad.fecha_visita
+        if actividad.situacion == "asignada" and fecha != dia:
+            if fecha:
                 otros_dias += 1
             else:
                 sin_fecha += 1
             continue
+        if actividad.situacion == "pendiente" and fecha and fecha != dia:
+            if not (fecha < hoy and dia == hoy):
+                pendientes_otros_dias += 1
+                continue
+            notas[codigo] = f"Pendiente desde el {fecha}"
         del_dia.append(actividad)
 
         edicion = ediciones.get(codigo)
@@ -306,6 +315,7 @@ def plan_del_dia(
         "dia": dia,
         "ots_otros_dias": otros_dias,
         "asignadas_sin_fecha": sin_fecha,
+        "pendientes_otros_dias": pendientes_otros_dias,
         "bia_sin_registrar": sorted(sin_registrar),
     }
     return del_dia, fijas, externas, notas, parejas, metricas
