@@ -734,9 +734,10 @@ body {
 }
 
 /* Map */
+/* What is left of the screen under the title, the filters and the tiles */
 .map-panel {
-  height: calc(100vh - 300px);
-  min-height: 460px;
+  height: calc(100vh - 460px);
+  min-height: 420px;
   border: 1px solid var(--hairline);
   border-radius: 12px;
   overflow: hidden;
