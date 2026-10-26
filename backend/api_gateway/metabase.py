@@ -42,6 +42,7 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     "fecha_visita": ["fecha de la visita", "fecha visita", "fecha"],
     "asignado_a": ["electricistas asignados", "electricistas", "tecnicos asignados", "tecnico asignado"],
     "contratista_asignado": ["contratista asignado", "contratista"],
+    "electricista_id": ["id electricista", "id del electricista", "electrician id", "electrician"],
     # La duración de una instalación depende del tipo de medida
     "tipo_medida": ["tipo de medida", "tipo medida", "medida", "measurement type", "measurement type id"],
 }
@@ -309,6 +310,7 @@ def filas_a_actividades(
             fecha_visita=_fecha(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
             hora_visita=_hora(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
             asignado_a=(_texto(fila.get(mapeo["asignado_a"])) or None) if "asignado_a" in mapeo else None,
+            electricista_id=(_texto(fila.get(mapeo["electricista_id"])) or None) if "electricista_id" in mapeo else None,
             contratista_asignado=(
                 (_texto(fila.get(mapeo["contratista_asignado"])) or None) if "contratista_asignado" in mapeo else None
             ),

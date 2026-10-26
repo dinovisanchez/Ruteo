@@ -660,10 +660,25 @@ body {
 
 .day-breakdown {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+  flex-direction: column;
+  gap: 6px;
   font-size: 12px;
   color: var(--label-2);
+}
+
+.day-breakdown-row {
+  display: grid;
+  grid-template-columns: 110px minmax(260px, auto) 1fr;
+  gap: 4px 16px;
+}
+
+.day-breakdown-date {
+  color: var(--label);
+  font-weight: 500;
+}
+
+.day-breakdown-codes {
+  color: var(--label-3);
 }
 
 /* Map */

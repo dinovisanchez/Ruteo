@@ -40,6 +40,7 @@ class Activity(BaseModel):
     fecha_visita: Optional[str] = None  # YYYY-MM-DD
     hora_visita: Optional[str] = None  # HH:MM, si Metabase trae la hora
     asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
+    electricista_id: Optional[str] = None  # Id del electricista responsable en Olibia
     contratista_asignado: Optional[str] = None
 
     def parse_coordinates(self) -> GPSCoordinates:
@@ -462,6 +463,8 @@ class AsignacionConfig(BaseModel):
     card_id: Optional[str] = None
     # Técnicos de la hoja que ya se agregaron alguna vez (si luego se borran, no vuelven a aparecer)
     hoja_importados: List[str] = Field(default_factory=list)
+    # Id del electricista en Olibia → id del técnico; se aprende de las OTs con un solo electricista
+    ids_electricistas: Dict[str, str] = Field(default_factory=dict)
 
 
 class Zona(BaseModel):
@@ -540,6 +543,10 @@ class AssignmentRequest(BaseModel):
     coberturas: List[CoberturaEquipo] = Field(default_factory=list)
     # Tiempos por las vías (OSRM); sin matriz, línea recta × factor vial a la velocidad promedio
     matriz: Optional[MatrizVial] = None
+    # Minutos que cada técnico ya usó en la semana (antes de este día) y los disponibles en ese lapso:
+    # el reparto da más trabajo a quien lleva menos, para que la semana quede pareja
+    uso_previo: Dict[str, float] = Field(default_factory=dict)
+    disponible_previo: float = 0
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 

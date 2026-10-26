@@ -157,6 +157,22 @@ def _resolver_vrp(
     return rutas, descartadas, minutos
 
 
+def _metas_parejas(minutos_hoy: float, previos: List[float]) -> List[int]:
+    """Minutos de hoy para cada vehículo de modo que lo que ya lleva + lo de hoy quede parejo.
+
+    Es un llenado por niveles: se busca el nivel N tal que la suma de max(0, N - previo)
+    sea igual a los minutos de hoy; quien lleva menos recibe más.
+    """
+    bajo, alto = min(previos), max(previos) + minutos_hoy
+    for _ in range(60):
+        medio = (bajo + alto) / 2
+        if sum(max(0.0, medio - previo) for previo in previos) < minutos_hoy:
+            bajo = medio
+        else:
+            alto = medio
+    return [max(0, math.ceil(alto - previo)) for previo in previos]
+
+
 def _resolver_balanceado(
     actividades: List[Activity],
     inicios: List[GPSCoordinates],
@@ -166,12 +182,14 @@ def _resolver_balanceado(
     limite_segundos: int,
     permitidos: Optional[List[Optional[List[int]]]] = None,
     fijadas: Optional[Set[int]] = None,
+    previos: Optional[List[float]] = None,
 ) -> Tuple[List[List[int]], List[int]]:
     """Como `_resolver_vrp`, pero reparte la carga entre los vehículos de un mismo grupo (base).
 
-    Primero resuelve sin metas; luego vuelve a resolver con la carga promedio de
-    cada grupo como meta. Se queda con la segunda solución si no deja más OTs
-    sin asignar.
+    Primero resuelve sin metas; luego vuelve a resolver con una meta de minutos por
+    vehículo: la carga promedio del grupo o, con `previos` (minutos que cada uno ya
+    trabajó en la semana), la que deja la semana pareja. Se queda con la segunda
+    solución si no deja más OTs sin asignar.
     """
     rutas, descartadas, minutos = _resolver_vrp(
         actividades, inicios, jornada, dist, limite_segundos, permitidos=permitidos, fijadas=fijadas
@@ -184,10 +202,15 @@ def _resolver_balanceado(
 
     metas: List[Optional[int]] = [None] * len(inicios)
     for vehiculos in por_grupo.values():
-        if len(vehiculos) >= 2:
-            meta = math.ceil(sum(minutos[v] for v in vehiculos) / len(vehiculos))
-            for v in vehiculos:
+        if len(vehiculos) < 2:
+            continue
+        total = sum(minutos[v] for v in vehiculos)
+        if previos:
+            for v, meta in zip(vehiculos, _metas_parejas(total, [previos[v] for v in vehiculos])):
                 metas[v] = meta
+        else:
+            for v in vehiculos:
+                metas[v] = math.ceil(total / len(vehiculos))
     rutas_b, descartadas_b, _ = _resolver_vrp(
         actividades, inicios, jornada, dist, limite_segundos, metas, permitidos, fijadas
     )
@@ -393,6 +416,10 @@ def _asignar_inhouse(
         permitidos.append(lista)
     fijadas = {i for i, a in enumerate(atendibles) if a.codigo_bia in fijas}
     inicios = [sedes[c[0].base_id].coordinates for c in cuadrillas]
+    # Lo que cada cuadrilla ya trabajó en la semana (promedio de sus integrantes)
+    previos = [
+        sum(request.uso_previo.get(t.id, 0) for t in c) / len(c) for c in cuadrillas
+    ] if request.uso_previo else None
 
     def resolver(indices: List[int], vehiculos: List[int]) -> Tuple[Dict[int, List[int]], List[int]]:
         """Resuelve solo esas actividades con esas cuadrillas; índices sobre `atendibles`"""
@@ -417,6 +444,7 @@ def _asignar_inhouse(
             _limite_solver(len(sub)),
             sub_permitidos,
             {k for k, i in enumerate(sub) if i in fijadas},
+            [previos[v] for v in vehiculos] if previos else None,
         )
         for k, ruta in enumerate(rutas_sub):
             rutas[vehiculos[k]] = [sub[j] for j in ruta]
@@ -739,6 +767,10 @@ def _decisiones(
                     motivo = f"Fijada a {asignada.responsable}; a {km:g} km de {sede.empresa}"
                 else:
                     motivo = f"A {km:g} km de {sede.empresa}; cabe en la jornada de {asignada.responsable}"
+                    if request.uso_previo and request.disponible_previo:
+                        integrantes = asignada.responsable_id.split("+")
+                        uso = sum(request.uso_previo.get(i, 0) for i in integrantes) / len(integrantes)
+                        motivo += f", que lleva {round(uso / request.disponible_previo * 100)} % de UTR en la semana"
                 if not asignada.ruta.viable:
                     motivo += ". Su ruta pasa de la jornada: revisa la carga de este técnico"
             decisiones[actividad.codigo_bia] = DecisionOT(
@@ -921,7 +953,7 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
             continue
         fijadas.add(codigo)
 
-    extra: Dict = {"tecnicos_disponibles": len(tecnicos)}
+    extra: Dict = {"tecnicos_disponibles": len(tecnicos), "reparto_por_semana": bool(request.uso_previo)}
     if request.modo == "contratistas":
         para_contratistas += libres
     elif request.modo == "inhouse":

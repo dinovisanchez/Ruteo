@@ -18,12 +18,15 @@ from pydantic import BaseModel, Field
 from shared.distancias import Distancias
 from shared.models import Activity, GPSCoordinates, JornadaConfig, ServiceTime, ZonaTransito
 from shared.utils import get_service_time
-from .assignment_routes import es_de_bia, leer_config, obtener_catalogo, obtener_zonas, tecnicos_mencionados
+from shared.catalogo import normalizar_texto
+from .assignment_routes import aprender_ids, es_de_bia, leer_config, obtener_catalogo, obtener_zonas, responsables
 
 router = APIRouter()
 
 # Desplazamiento de una OT sin ubicación cuando ninguna OT de ese día tiene ubicación
 MINUTOS_VIAJE_SIN_UBICACION = 25
+# Un tramo más largo que esto en la ruta de un día es casi siempre una dirección mal ubicada
+MAX_KM_TRAMO = 200
 MAX_DIAS = 93
 
 
@@ -48,6 +51,8 @@ class UtilizacionRequest(BaseModel):
     horas_semana: float = Field(default=42, gt=0, le=80)
     dias_semana: int = Field(default=5, ge=1, le=7)  # Lunes a viernes = 5; lunes a sábado = 6
     tiempos_servicio: List[ServiceTime] = Field(default_factory=list)
+    # Tipo de OT → personas que necesita: cuántos de los electricistas listados cuentan
+    personas_por_tipo: Dict[str, int] = Field(default_factory=dict)
     transito: List[ZonaTransito] = Field(default_factory=list)
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
     # Si viene, ese día cada técnico cuenta con su ruta del plan (asignadas + sugeridas), más las
@@ -63,9 +68,12 @@ def minutos_de_viaje(
 ) -> Tuple[int, float, bool]:
     """Desplazamiento del día: base → OTs (por hora de visita; si no hay, por cercanía) → base.
 
-    Las OTs sin ubicación suman el promedio de los demás tramos. Devuelve (minutos, km, estimado).
+    Las OTs sin ubicación, o a más de MAX_KM_TRAMO de su tramo anterior (ubicación errada), suman
+    el promedio de los demás tramos. Devuelve (minutos, km, estimado).
     """
     ubicadas = [a for a in ots if a.coordinates is not None]
+    if base is not None:
+        ubicadas = [a for a in ubicadas if dist.km(base, a.coordinates) <= MAX_KM_TRAMO]
     if any(a.hora_visita for a in ubicadas):
         orden = sorted(ubicadas, key=lambda a: a.hora_visita or "99:99")
     else:
@@ -103,6 +111,10 @@ async def utilizacion(request: UtilizacionRequest):
 
     config = leer_config()
     tecnicos = [t for t in config.tecnicos if t.activo]
+    personas = {normalizar_texto(k): v for k, v in request.personas_por_tipo.items()}
+    for actividad in request.actividades:
+        actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
+    ids = aprender_ids(request.actividades, config)
     sedes = {s.id: s for s in obtener_catalogo()["sedes"]}
     coberturas, transito = obtener_zonas()
     equipo_de_base = {c.base_id: c.equipo for c in coberturas}
@@ -125,7 +137,7 @@ async def utilizacion(request: UtilizacionRequest):
                 actividad.parse_coordinates()
             except ValueError:
                 pass
-        mencionados = tecnicos_mencionados(actividad.asignado_a, tecnicos)
+        mencionados = responsables(actividad, tecnicos, ids)
         if not mencionados:
             if actividad.asignado_a and es_de_bia(actividad.contratista_asignado):
                 sin_registrar[actividad.asignado_a] += 1
@@ -172,13 +184,15 @@ async def utilizacion(request: UtilizacionRequest):
                     "km": round(ruta.km, 1),
                     "viaje_estimado": bool(fuera),
                     "plan": True,
+                    "codigos": list(ruta.codigos) + [a.codigo_bia for a in fuera],
                 })
                 ots_por_dia[fecha].update(ruta.codigos)
                 ots_por_dia[fecha].update(a.codigo_bia for a in fuera)
                 continue
             viaje, km, estimado = minutos_de_viaje(ots, base.coordinates if base else None, dist, jornada.incluir_retorno)
             dias.append({"fecha": fecha, "ots": len(ots), "servicio_min": servicio_de(ots), "viaje_min": viaje,
-                         "km": km, "viaje_estimado": estimado, "plan": False})
+                         "km": km, "viaje_estimado": estimado, "plan": False,
+                         "codigos": [a.codigo_bia for a in ots]})
             ots_por_dia[fecha].update(a.codigo_bia for a in ots)
         for d in dias:
             por_dia[d["fecha"]]["usado_min"] += d["servicio_min"] + d["viaje_min"]

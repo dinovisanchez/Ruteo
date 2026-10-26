@@ -111,11 +111,15 @@ const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
   },
   {
     label: 'Técnicos',
-    options: tecnicos.map((t) => ({
-      value: `tecnico:${t.id}`,
-      label: t.disponible ? t.nombre : `${t.nombre} (no disponible)`,
-      disabled: !t.disponible,
-    })),
+    // Least loaded first, with their UTR of the week, so the even choice is at hand
+    options: [...tecnicos]
+      .sort((a, b) => (b.disponible - a.disponible) || ((a.utr ?? 0) - (b.utr ?? 0)))
+      .map((t) => ({
+        value: `tecnico:${t.id}`,
+        label: !t.disponible ? `${t.nombre} (no disponible)`
+          : `${t.nombre}${t.utr !== undefined && t.utr !== null ? ` · ${Math.round(t.utr * 100)} % en la semana` : ''}`,
+        disabled: !t.disponible,
+      })),
   },
   {
     label: 'Contratistas',
@@ -330,6 +334,7 @@ const AssignmentResults = ({
       <div className="summary-note">
         {visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
+        {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
         <Tooltip title="Descargar el plan en CSV">
           <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />

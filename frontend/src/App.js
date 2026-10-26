@@ -11,7 +11,9 @@ import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
 import OtsTable from './components/OtsTable';
 import UtilizationDashboard from './components/UtilizationDashboard';
-import { assignActivities, getCatalog, getZones } from './services/api';
+import {
+  assignActivities, getCatalog, getUtilization, getZones,
+} from './services/api';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
 
@@ -23,12 +25,13 @@ const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
 
 /**
  * Whether an OT belongs to the plan of `dia`: assigned ones on their visit date; pending ones on their
- * visit date too (or today, if that date already passed and it is still pending); undated ones any day.
- * Assigned without a date also travel, so the server can report them.
+ * visit date too (or today, if that date already passed and it is still pending); undated pending ones
+ * today or any future day (past days only show what happened). Assigned without a date also travel,
+ * so the server can report them.
  */
 const entraEnElDia = (a, dia, hoy) => {
-  if (!a.fecha_visita) return true;
   if (a.fecha_visita === dia) return true;
+  if (!a.fecha_visita) return a.situacion === 'asignada' || dia >= hoy;
   return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
 };
 const ISO_DAY = 'YYYY-MM-DD';
@@ -90,6 +93,8 @@ function App() {
   const [asignadoA, setAsignadoA] = useState([]);
   // Weekly hours of a technician and working days, for utilization (UTR)
   const [capacidad, setCapacidad] = useState({ horasSemana: 42, diasSemana: 5 });
+  // UTR of each technician in the week before the plan day (technician id → 0..1), to show when editing
+  const [utrSemana, setUtrSemana] = useState({});
   // Who the plan sends it to: "tecnico", "contratista", "externo" or "sin_asignar" (the summary tiles)
   const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
@@ -127,6 +132,30 @@ function App() {
     setLoading(true);
     try {
       message.loading({ content: 'Calculando el plan del día...', key: 'assign', duration: 0 });
+      // What each technician already worked this week (Monday to the day before): the plan gives
+      // more to whoever has worked less, so the week comes out even
+      const lunes = dayjs(diaPlan).subtract((dayjs(diaPlan).day() + 6) % 7, 'day');
+      if (lunes.isBefore(dayjs(diaPlan), 'day')) {
+        try {
+          const semana = await getUtilization({
+            actividades: base.actividades.filter((a) => a.situacion === 'asignada').map((a) => ({ ...a, extras: {} })),
+            desde: lunes.format(ISO_DAY),
+            hasta: dayjs(diaPlan).subtract(1, 'day').format(ISO_DAY),
+            horas_semana: capacidad.horasSemana,
+            dias_semana: capacidad.diasSemana,
+            tiempos_servicio: base.jornada.tiempos_servicio,
+            personas_por_tipo: base.personas_por_tipo,
+          });
+          request.uso_previo = Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.usado_min]));
+          request.disponible_previo = semana.tecnicos[0]?.disponible_min || 0;
+          setUtrSemana(Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.utr])));
+        } catch (error) {
+          console.warn('Sin la carga de la semana: el reparto solo equilibra el día', error);
+          setUtrSemana({});
+        }
+      } else {
+        setUtrSemana({});
+      }
       let assignment = await assignActivities(request);
       // The backend could not reach the road server: the browser asks for the road times and the plan is redone
       if (!assignment.metricas.tiempos_por_vias) {
@@ -155,7 +184,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [dia, fijas, catalog]);
+  }, [dia, fijas, catalog, capacidad]);
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
@@ -237,7 +266,7 @@ function App() {
   const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
   const tecnicosEdicion = config.tecnicos
     .filter((t) => t.activo !== false)
-    .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id) }));
+    .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id), utr: utrSemana[t.id] }));
   const ediciones = Object.keys(fijas).length;
   const hoy = dayjs().format(ISO_DAY);
 

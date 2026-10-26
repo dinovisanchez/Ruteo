@@ -86,6 +86,7 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
       horas_semana: horasSemana,
       dias_semana: diasSemana,
       tiempos_servicio: tipos.map((s) => ({ servicio: s, duracion_minutos: otTypeSettings(s, config.tipos_ot).minutos })),
+      personas_por_tipo: Object.fromEntries(tipos.map((s) => [s, otTypeSettings(s, config.tipos_ot).personas])),
       plan,
     })
       .then((d) => { if (!cancelado) setDatos(d); })
@@ -149,13 +150,17 @@ const UtilizationDashboard = ({ ots, config, dia, result, tecnicosFiltro, horasS
     },
   ];
 
+  // Day by day, with the OTs counted, so each number can be checked against the plan of that day
   const detalleDias = (t) => (
     <div className="day-breakdown">
       {t.dias.length ? t.dias.map((d) => (
-        <span key={d.fecha}>
-          {capitalizar(dayjs(d.fecha).format('ddd D'))}: {d.ots} OTs · {horas(d.servicio_min + d.viaje_min)} · {Math.round(d.km || 0)} km
-          {d.plan ? ' (plan)' : ''}
-        </span>
+        <div key={d.fecha} className="day-breakdown-row">
+          <span className="day-breakdown-date">{capitalizar(dayjs(d.fecha).format('ddd D MMM'))}{d.plan ? ' · plan' : ''}</span>
+          <span>
+            {d.ots} {d.ots === 1 ? 'OT' : 'OTs'} · {horas(d.servicio_min + d.viaje_min)} ({horas(d.servicio_min)} en OTs, {horas(d.viaje_min)} de viaje{d.viaje_estimado ? ' estimado' : ''}) · {Math.round(d.km || 0)} km
+          </span>
+          <span className="day-breakdown-codes">{(d.codigos || []).join(', ')}</span>
+        </div>
       )) : 'Sin OTs en el periodo'}
     </div>
   );
