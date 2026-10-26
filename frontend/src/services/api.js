@@ -158,6 +158,17 @@ export const getZones = async () => {
 };
 
 /**
+ * Utilization (UTR) of the Bia technicians between two dates
+ * @param {Object} request - { actividades, desde, hasta, horas_semana, dias_semana, tiempos_servicio, plan? }
+ * @returns {Promise<Object>} { tecnicos: [{ nombre, equipo, ots, servicio_min, viaje_min, usado_min, disponible_min, utr, dias }],
+ *   por_dia, equipo, horas_dia, dias_laborables, sin_registrar }
+ */
+export const getUtilization = async (request) => {
+  const response = await apiClient.post('/utilizacion', request);
+  return response.data;
+};
+
+/**
  * Road geometry of routes (OSRM), to draw them along the streets
  * @param {Object[]} rutas - [{ id, puntos: [[lat, lon], ...] }] in visiting order
  * @returns {Promise<Object>} { rutas: { [id]: { geometria: [[lat, lon], ...], km } }, aviso? }

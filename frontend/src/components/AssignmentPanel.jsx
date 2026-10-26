@@ -38,6 +38,17 @@ const writeKnownOts = (codes) => {
   }
 };
 
+// Automatic update: on by default, remembered in this browser
+const AUTO_REFRESH_KEY = 'ruteo_actualizar';
+
+const readAutoRefresh = () => {
+  try {
+    return { activo: true, minutos: 10, ...JSON.parse(localStorage.getItem(AUTO_REFRESH_KEY) || '{}') };
+  } catch (error) {
+    return { activo: true, minutos: 10 };
+  }
+};
+
 const countBy = (items, key) => {
   const counts = {};
   (items || []).forEach((a) => { counts[a[key]] = (counts[a[key]] || 0) + 1; });
@@ -59,8 +70,9 @@ const AssignmentPanel = forwardRef(({
   const [nuevaPregunta, setNuevaPregunta] = useState('');
   const [fetching, setFetching] = useState(false);
   const [fetchInfo, setFetchInfo] = useState(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const [refreshMinutes, setRefreshMinutes] = useState(10);
+  const [autoRefresh, setAutoRefresh] = useState(() => readAutoRefresh().activo);
+  const [refreshMinutes, setRefreshMinutes] = useState(() => readAutoRefresh().minutos);
+  const [configCargada, setConfigCargada] = useState(false);
   // Every section starts minimized; Ajustes opens by itself when there is no question saved yet
   const [abiertas, setAbiertas] = useState([]);
   const [orFilter, setOrFilter] = useState([]);
@@ -88,7 +100,9 @@ const AssignmentPanel = forwardRef(({
         }
       })
       .catch(() => setStatus({ configurado: false, sinBackend: true }));
-    getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
+    getAssignmentConfig()
+      .then((saved) => { onConfigChange(saved); setConfigCargada(true); })
+      .catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
     getSheetTechnicians().then(setHojaTecnicos).catch(() => setHojaTecnicos([]));
   }, [onConfigChange]);
 
@@ -187,10 +201,17 @@ const AssignmentPanel = forwardRef(({
     });
   };
 
+  // When the OTs were last read from Metabase, and whether a reading is under way
+  const ultimaLecturaRef = useRef(0);
+  const leyendoRef = useRef(false);
+
   const loadOts = async (silent) => {
+    if (leyendoRef.current) return null;
+    leyendoRef.current = true;
     setFetching(true);
     try {
       const data = await fetchMetabaseOTs(cardId.trim());
+      ultimaLecturaRef.current = Date.now();
       const codes = data.actividades.map((a) => a.codigo_bia);
       if (knownRef.current === null) knownRef.current = readKnownOts();
       const known = knownRef.current;
@@ -213,6 +234,7 @@ const AssignmentPanel = forwardRef(({
       if (!silent) message.error(error.message, 8);
       return null;
     } finally {
+      leyendoRef.current = false;
       setFetching(false);
     }
   };
@@ -225,22 +247,53 @@ const AssignmentPanel = forwardRef(({
 
   // The header buttons and the interval call the latest version through a ref
   const actionsRef = useRef({});
-  actionsRef.current = { extract: () => extractAndRecommend(false), recalc: () => runAssign(ots) };
+  actionsRef.current = {
+    extract: () => extractAndRecommend(false),
+    refresh: () => extractAndRecommend(true),
+    recalc: () => runAssign(ots),
+  };
   useImperativeHandle(ref, () => ({
     extract: () => actionsRef.current.extract(),
+    refresh: () => actionsRef.current.refresh(),
     recalc: () => actionsRef.current.recalc(),
   }), []);
 
   const canExtract = Boolean(status?.configurado && cardId.trim());
-  useEffect(() => { onStateChange({ canExtract, fetching }); }, [canExtract, fetching, onStateChange]);
+  useEffect(() => {
+    onStateChange({ canExtract, fetching, autoRefresh });
+  }, [canExtract, fetching, autoRefresh, onStateChange]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_REFRESH_KEY, JSON.stringify({ activo: autoRefresh, minutos: refreshMinutes }));
+    } catch (error) {
+      // Without storage it goes back to the default on reload
+    }
+  }, [autoRefresh, refreshMinutes]);
+
+  // With automatic update on, the plan loads by itself when the app opens (once the technicians and
+  // OT types are read), every N minutes, and when coming back to the tab after longer than that
   const autoRef = useRef(extractAndRecommend);
   autoRef.current = extractAndRecommend;
+  const arrancoRef = useRef(false);
   useEffect(() => {
-    if (!autoRefresh) return undefined;
-    const id = setInterval(() => autoRef.current(true), Math.max(1, refreshMinutes) * 60 * 1000);
-    return () => clearInterval(id);
-  }, [autoRefresh, refreshMinutes]);
+    if (!autoRefresh || !canExtract || !configCargada || arrancoRef.current) return;
+    arrancoRef.current = true;
+    if (!ultimaLecturaRef.current) autoRef.current(true);
+  }, [autoRefresh, canExtract, configCargada]);
+  useEffect(() => {
+    if (!autoRefresh || !canExtract) return undefined;
+    const periodo = Math.max(1, refreshMinutes) * 60 * 1000;
+    const id = setInterval(() => autoRef.current(true), periodo);
+    const alVolver = () => {
+      if (document.visibilityState === 'visible' && Date.now() - ultimaLecturaRef.current > periodo) autoRef.current(true);
+    };
+    document.addEventListener('visibilitychange', alVolver);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', alVolver);
+    };
+  }, [autoRefresh, canExtract, refreshMinutes]);
 
   const saveDefaultCard = async () => {
     try {
@@ -428,9 +481,21 @@ const AssignmentPanel = forwardRef(({
       <Space style={{ marginTop: 8 }} size={6} wrap>
         <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
         <Text style={{ fontSize: 13 }}>Actualizar cada</Text>
-        <InputNumber size="small" min={1} max={120} value={refreshMinutes} onChange={setRefreshMinutes} style={{ width: 60 }} />
+        <InputNumber
+          size="small"
+          min={1}
+          max={120}
+          value={refreshMinutes}
+          onChange={(v) => setRefreshMinutes(v || 10)}
+          style={{ width: 60 }}
+        />
         <Text style={{ fontSize: 13 }}>min</Text>
       </Space>
+      <Text type="secondary" className="ios-footnote" style={{ display: 'block', marginTop: 2 }}>
+        {autoRefresh
+          ? 'Carga el plan al abrir la app, cada pocos minutos y al empezar un nuevo día'
+          : 'Al empezar un nuevo día solo se recalcula con las OTs ya cargadas'}
+      </Text>
       <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
         <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
           o subir un Excel/CSV

@@ -111,11 +111,15 @@ const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
   },
   {
     label: 'Técnicos',
-    options: tecnicos.map((t) => ({
-      value: `tecnico:${t.id}`,
-      label: t.disponible ? t.nombre : `${t.nombre} (no disponible)`,
-      disabled: !t.disponible,
-    })),
+    // Least loaded first, with their UTR of the week, so the even choice is at hand
+    options: [...tecnicos]
+      .sort((a, b) => (b.disponible - a.disponible) || ((a.utr ?? 0) - (b.utr ?? 0)))
+      .map((t) => ({
+        value: `tecnico:${t.id}`,
+        label: !t.disponible ? `${t.nombre} (no disponible)`
+          : `${t.nombre}${t.utr !== undefined && t.utr !== null ? ` · ${Math.round(t.utr * 100)} % en la semana` : ''}`,
+        disabled: !t.disponible,
+      })),
   },
   {
     label: 'Contratistas',
@@ -174,8 +178,9 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 };
 
 const AssignmentResults = ({
-  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, fijas = {}, onEdit, tecnicos = [],
-  empresas = [], editing,
+  result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
+  onFiltrar, horasDia = 8.4, porAsignar = null,
+  fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
     () => Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion])),
@@ -203,18 +208,66 @@ const AssignmentResults = ({
   }));
   const rows = visibles ? allRows.filter((r) => visibles.has(r.decision.codigo_bia)) : allRows;
 
-  const resumen = [
-    `${result.total_actividades} OTs`,
-    `${metricas.ots_ya_asignadas ?? 0} asignadas`,
-    `${metricas.ots_pendientes ?? 0} por asignar`,
-  ];
-  const reparto = [
-    `${metricas.ots_con_tecnicos} a técnicos Bia`,
-    `${metricas.ots_con_contratistas} a contratistas`,
-    metricas.ots_externas ? `${metricas.ots_externas} externas` : null,
-    metricas.ots_sin_asignar ? `${metricas.ots_sin_asignar} sin asignar` : null,
-    `${km(result.distancia_total_km)} km`,
-    metricas.costo_total !== null && metricas.costo_total !== undefined ? formatCop(metricas.costo_total) : null,
+  // Routes with some OT that passes the filters: their km, hours and cost are the ones the tiles add up
+  const rutasVisibles = result.rutas
+    .map((r, idx) => ({ r, idx }))
+    .filter(({ r }) => !visibles || r.ruta.paradas.some((p) => visibles.has(p.actividad.codigo_bia)));
+  const kmVisibles = rutasVisibles.reduce((suma, { r }) => suma + r.ruta.distancia_total_km, 0);
+  const rutasTecnicos = rutasVisibles.filter(({ r }) => r.tipo === 'tecnico');
+  const horasTecnicos = rutasTecnicos.reduce((suma, { r }) => suma + r.ruta.tiempo_total_minutos, 0) / 60;
+  const costos = rutasTecnicos.map(({ r }) => r.costo).filter((c) => c !== null && c !== undefined);
+
+  // Summary tiles: they count what the filters select (the selected people, the search...);
+  // touching one filters by it and touching it again removes that filter
+  const c = conteos || {
+    total: result.total_actividades,
+    asignada: metricas.ots_ya_asignadas ?? 0,
+    pendiente: metricas.ots_pendientes ?? 0,
+    tecnico: metricas.ots_con_tecnicos,
+    contratista: metricas.ots_con_contratistas,
+    externo: metricas.ots_externas,
+    sin_asignar: metricas.ots_sin_asignar,
+  };
+  const porEstado = (valor) => () => onFiltrar({ estado: estado === valor ? 'todas' : valor });
+  const porDestino = (valor) => () => onFiltrar({ destino: destino === valor ? null : valor });
+  const tiles = [
+    {
+      title: 'OTs del día',
+      value: c.total,
+      active: estado === 'todas' && !destino,
+      onClick: () => onFiltrar({ estado: 'todas', destino: null }),
+    },
+    { title: 'Asignadas', value: c.asignada, color: '#248A3D', active: estado === 'asignadas', onClick: porEstado('asignadas') },
+    {
+      title: 'Por asignar',
+      value: c.pendiente,
+      color: '#C93400',
+      active: estado === 'pendientes',
+      onClick: porEstado('pendientes'),
+      // Without a person or search selected: everything still pending in Metabase, of any date
+      // (non-breaking spaces: when it wraps, it wraps between the two parts)
+      sub: porAsignar ? `${porAsignar.total}\u00a0en\u00a0total${porAsignar.vencidas
+        ? ` · ${porAsignar.vencidas}\u00a0${porAsignar.vencidas > 1 ? 'vencidas' : 'vencida'}` : ''}` : null,
+      hint: porAsignar ? [
+        `Pendientes del día: ${c.pendiente}`,
+        `Pendientes en total: ${porAsignar.total}`,
+        `· vencidas: ${porAsignar.vencidas}`,
+        `· para hoy: ${porAsignar.hoy}`,
+        `· próximos días: ${porAsignar.proximas}`,
+        `· sin fecha: ${porAsignar.sinFecha}`,
+      ].join('\n') : null,
+    },
+    { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
+    { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
+    metricas.ots_externas
+      ? { title: 'Externas', value: c.externo, active: destino === 'externo', onClick: porDestino('externo') }
+      : null,
+    metricas.ots_sin_asignar
+      ? { title: 'Sin asignar', value: c.sin_asignar, color: '#FF3B30', active: destino === 'sin_asignar', onClick: porDestino('sin_asignar') }
+      : null,
+    { title: 'Km', value: km(kmVisibles), hint: visibles ? 'De las rutas que muestra el filtro' : 'De todas las rutas del día' },
+    { title: 'Horas técnicos', value: horasTecnicos.toLocaleString('es-CO', { maximumFractionDigits: 1 }), hint: 'OTs + viaje de las rutas de técnicos mostradas' },
+    costos.length ? { title: 'Costo técnicos', value: formatCop(costos.reduce((a, b) => a + b, 0)) } : null,
   ].filter(Boolean);
   const transito = (metricas.transito || []).filter((z) => z.recargo_pct || z.minutos_extra)
     .map((z) => `${z.nombre} +${z.recargo_pct} %${z.minutos_extra ? ` +${z.minutos_extra} min` : ''}`).join(', ');
@@ -223,6 +276,11 @@ const AssignmentResults = ({
     metricas.tiempos_por_vias ? null : (metricas.aviso_vias || 'Tiempos estimados en línea recta'),
     metricas.asignadas_sin_fecha > 0 ? `${metricas.asignadas_sin_fecha} asignadas sin fecha en Metabase` : null,
     metricas.ots_sin_lista_or > 0 ? `${metricas.ots_sin_lista_or} OTs de OR sin contratistas en su zona` : null,
+    metricas.pendientes_otros_dias > 0 ? `${metricas.pendientes_otros_dias} pendientes tienen fecha de otro día` : null,
+    metricas.ots_sin_ubicacion > 0 ? `${metricas.ots_sin_ubicacion} OTs asignadas sin ubicación (no entran en el mapa)` : null,
+    metricas.bia_sin_registrar?.length
+      ? `Técnicos de Bia en Metabase que no están en la app: ${metricas.bia_sin_registrar.join(', ')} (agrégalos en Técnicos → Gestionar)`
+      : null,
   ].filter(Boolean);
 
   const columns = [
@@ -273,25 +331,33 @@ const AssignmentResults = ({
     },
   ];
 
-  const rutasVisibles = result.rutas
-    .map((r, idx) => ({ r, idx }))
-    .filter(({ r }) => !visibles || r.ruta.paradas.some((p) => visibles.has(p.actividad.codigo_bia)));
-
   return (
     <>
-      <div className="summary">
-        <div>
-          <span className="summary-main">{resumen.join(' · ')}</span>
-          <span className="summary-sub">{reparto.join(' · ')}</span>
-          {visibles && <span className="summary-sub">Mostrando {rows.length} de {allRows.length}</span>}
-        </div>
-        <Tooltip title="Descargar el plan en CSV">
-          <Button type="text" icon={<DownloadOutlined />} onClick={() => exportCsv(allRows, metricas.dia)} />
-        </Tooltip>
+      <div className="kpi-row">
+        {tiles.map((t) => (
+          <button
+            key={t.title}
+            type="button"
+            title={t.hint}
+            className={`kpi${t.active ? ' active' : ''}${t.onClick ? '' : ' static'}`}
+            aria-pressed={t.onClick ? t.active : undefined}
+            disabled={!t.onClick || !onFiltrar}
+            onClick={t.onClick}
+          >
+            <span className="kpi-title">{t.title}</span>
+            <span className="kpi-value" style={t.color ? { color: t.color } : undefined}>{t.value}</span>
+            {t.sub && <span className="kpi-sub">{t.sub}</span>}
+          </button>
+        ))}
       </div>
       <div className="summary-note">
+        {visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
+        {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
+        <Tooltip title="Descargar el plan en CSV">
+          <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />
+        </Tooltip>
       </div>
 
       {view === 'lista' && (
@@ -334,6 +400,12 @@ const AssignmentResults = ({
                     <div className="route-sub">
                       {r.ruta.paradas.length} OTs{yaAsignadas ? ` (${yaAsignadas} asignadas)` : ''}
                       {' · '}{hhmm(r.ruta.hora_inicio)}–{hhmm(r.ruta.hora_fin)} · {km(r.ruta.distancia_total_km)} km
+                      {r.tipo === 'tecnico' && (
+                        ` · ${(r.ruta.tiempo_total_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} h usadas`
+                        + ` (${(r.ruta.tiempo_trabajo_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} en OTs,`
+                        + ` ${(r.ruta.tiempo_desplazamiento_minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 })} de viaje)`
+                        + ` · UTR ${Math.round((r.ruta.tiempo_total_minutos / 60 / horasDia) * 100)} %`
+                      )}
                       {r.personas > 1 ? ` · ${r.personas} personas` : ''}
                       {r.costo !== null && r.costo !== undefined ? ` · ${formatCop(r.costo)}` : ''}
                       {' · sale de '}{r.sede.ciudad}

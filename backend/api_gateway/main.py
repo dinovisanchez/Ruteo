@@ -12,6 +12,7 @@ from shared.config import settings
 from shared.utils import setup_logging
 from .routes import router
 from .assignment_routes import router as assignment_router
+from .utilizacion import router as utilizacion_router
 
 # Setup logging
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
@@ -39,6 +40,7 @@ app.add_middleware(
 # Include routes
 app.include_router(router, prefix="/api", tags=["API"])
 app.include_router(assignment_router, prefix="/api", tags=["Asignación por OR"])
+app.include_router(utilizacion_router, prefix="/api", tags=["Utilización de técnicos"])
 
 # Serve uploaded files (for development)
 UPLOAD_DIR = Path(settings.UPLOAD_DIR)

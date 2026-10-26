@@ -96,10 +96,21 @@ def tecnicos_de_la_hoja() -> List[Tecnico]:
 
 
 def leer_config() -> AsignacionConfig:
-    # La primera vez, los técnicos salen de la hoja
+    """Configuración guardada; los técnicos de la hoja que aún no están se agregan solos (una vez)"""
+    hoja = tecnicos_de_la_hoja()
     if not CONFIG_PATH.exists():
-        return AsignacionConfig(tecnicos=tecnicos_de_la_hoja())
-    return AsignacionConfig.model_validate_json(CONFIG_PATH.read_text(encoding="utf-8"))
+        return AsignacionConfig(tecnicos=hoja, hoja_importados=[t.id for t in hoja])
+    config = AsignacionConfig.model_validate_json(CONFIG_PATH.read_text(encoding="utf-8"))
+    registrados = {clave(t.nombre) for t in config.tecnicos} | {t.id for t in config.tecnicos}
+    nuevos = [t for t in hoja if t.id not in config.hoja_importados and not {clave(t.nombre), t.id} & registrados]
+    vistos = sorted(set(config.hoja_importados) | {t.id for t in hoja})
+    if nuevos or vistos != sorted(config.hoja_importados):
+        config.tecnicos += nuevos
+        config.hoja_importados = vistos
+        guardar_config(config)
+        if nuevos:
+            logger.info(f"Técnicos agregados desde la hoja: {', '.join(t.nombre for t in nuevos)}")
+    return config
 
 
 def guardar_config(config: AsignacionConfig) -> None:
@@ -142,6 +153,9 @@ class AsignarRequest(BaseModel):
     transito: List[ZonaTransito] = Field(default_factory=list)
     # Tiempos por las vías que trae el navegador cuando el backend no llega a OSRM
     matriz: Optional[MatrizVial] = None
+    # Carga de cada técnico en la semana antes de este día, para repartir de forma pareja
+    uso_previo: Dict[str, float] = Field(default_factory=dict)
+    disponible_previo: float = 0
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
@@ -154,22 +168,89 @@ class TrazadoRequest(BaseModel):
     rutas: List[TrazadoRuta]
 
 
+def _como_suena(palabra: str) -> str:
+    """Quita diferencias de ortografía que no cambian el sonido: Jhonatan = Jonathan, Gelvez ~ Gelver"""
+    palabra = re.sub(r"c([ei])", r"s\1", palabra).replace("h", "").replace("v", "b").replace("z", "s").replace("y", "i")
+    return re.sub(r"(.)\1+", r"\1", palabra)
+
+
+def _parecidas(a: str, b: str) -> bool:
+    """Misma palabra al oído, o una letra distinta en palabras de 5 o más letras ("gelver" / "gelvez")"""
+    a, b = _como_suena(a), _como_suena(b)
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5 or abs(len(a) - len(b)) > 1:
+        return False
+    anterior = list(range(len(b) + 1))
+    for i, letra_a in enumerate(a, start=1):
+        actual = [i]
+        for j, letra_b in enumerate(b, start=1):
+            actual.append(min(anterior[j] + 1, actual[j - 1] + 1, anterior[j - 1] + (letra_a != letra_b)))
+        anterior = actual
+    return anterior[-1] <= 1
+
+
+# Separa las personas en "Electricistas asignados" ("Carlos Salas, Juan Reyes", '["A", "B"]', "A y B")
+SEPARADOR_PERSONAS = re.compile(r"[,;|/\n\[\]\"]+| y ", flags=re.IGNORECASE)
+
+
 def tecnicos_mencionados(texto: Optional[str], tecnicos: List[Tecnico]) -> List[Tecnico]:
     """Técnicos de la app que aparecen en "Electricistas asignados" de Metabase.
 
     Cada persona del texto ("CARLOS ANDRÉS SALAS, Juan Reyes") coincide con el técnico
-    cuyo nombre completo está contenido en ella, sin importar mayúsculas ni tildes.
+    cuyas palabras del nombre están todas en ella, sin importar mayúsculas, tildes ni una
+    letra distinta en el apellido.
     """
     encontrados: List[Tecnico] = []
-    for persona in re.split(r"[,;|/\n\[\]\"]+| y ", texto or "", flags=re.IGNORECASE):
-        palabras = set(clave(persona).split())
+    for persona in SEPARADOR_PERSONAS.split(texto or ""):
+        palabras = clave(persona).split()
         if not palabras:
             continue
         for tecnico in tecnicos:
-            nombre = set(clave(tecnico.nombre).split())
-            if nombre and nombre <= palabras and tecnico not in encontrados:
+            nombre = clave(tecnico.nombre).split()
+            if (
+                nombre and tecnico not in encontrados
+                and all(any(_parecidas(n, p) for p in palabras) for n in nombre)
+            ):
                 encontrados.append(tecnico)
     return encontrados
+
+
+def aprender_ids(actividades: List[Activity], config: AsignacionConfig) -> Dict[str, str]:
+    """Id del electricista en Olibia → técnico, aprendido de las OTs con un solo electricista reconocido.
+
+    Se guarda en la configuración para usarlo en las OTs que listan a varias personas.
+    """
+    ids = dict(config.ids_electricistas)
+    for actividad in actividades:
+        if not actividad.electricista_id or actividad.electricista_id in ids:
+            continue
+        personas = [p for p in SEPARADOR_PERSONAS.split(actividad.asignado_a or "") if clave(p)]
+        mencionados = tecnicos_mencionados(actividad.asignado_a, config.tecnicos)
+        if len(personas) == 1 and len(mencionados) == 1:
+            ids[actividad.electricista_id] = mencionados[0].id
+    if ids != config.ids_electricistas:
+        config.ids_electricistas = ids
+        guardar_config(config)
+    return ids
+
+
+def responsables(actividad: Activity, tecnicos: List[Tecnico], ids: Dict[str, str]) -> List[Tecnico]:
+    """Técnicos que hacen la OT: el de "Id electricista" primero y solo tantos como pide su tipo.
+
+    "Electricistas asignados" puede traer a más personas de las que fueron (por ejemplo, tras una
+    reasignación); así una OT de 1 persona no se le cuenta a dos técnicos.
+    """
+    mencionados = tecnicos_mencionados(actividad.asignado_a, tecnicos)
+    principal = next((t for t in tecnicos if t.id == ids.get(actividad.electricista_id or "")), None)
+    if principal:
+        mencionados = [principal] + [t for t in mencionados if t.id != principal.id]
+    return mencionados[:max(1, actividad.personas_requeridas)]
+
+
+def es_de_bia(contratista: Optional[str]) -> bool:
+    """El "Contratista asignado" de Metabase es Bia (técnicos propios)"""
+    return "bia" in clave(contratista or "").split()
 
 
 def empresa_mencionada(texto: Optional[str], sedes: List[SedeOperativa]) -> Optional[str]:
@@ -193,10 +274,13 @@ def plan_del_dia(
     tecnicos: List[Tecnico],
     disponibles: List[Tecnico],
     sedes: List[SedeOperativa],
+    ids_electricistas: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[Activity], Dict[str, str], Dict[str, str], Dict[str, str], List[List[str]], Dict]:
     """OTs del día y a quién quedan fijadas.
 
-    Entran las pendientes y las asignadas en Metabase para `dia`. Una asignada queda
+    Entran las asignadas en Metabase para `dia` y las pendientes de ese día: una pendiente con
+    fecha de visita entra ese día (o hoy, si la fecha ya pasó y sigue pendiente); sin fecha,
+    entra hoy o cualquier día futuro. Una asignada queda
     fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
     si está en el catálogo, o como externa si su responsable no está en la app. Las
     ediciones a mano mandan sobre lo que dice Metabase.
@@ -209,16 +293,27 @@ def plan_del_dia(
     externas: Dict[str, str] = {}
     notas: Dict[str, str] = {}
     parejas: List[List[str]] = []
-    otros_dias = sin_fecha = 0
+    sin_registrar: Dict[str, int] = {}
+    otros_dias = sin_fecha = pendientes_otros_dias = 0
+    hoy = date.today().isoformat()
 
     for actividad in actividades:
         codigo = actividad.codigo_bia
-        if actividad.situacion == "asignada" and actividad.fecha_visita != dia:
-            if actividad.fecha_visita:
+        fecha = actividad.fecha_visita
+        if actividad.situacion == "asignada" and fecha != dia:
+            if fecha:
                 otros_dias += 1
             else:
                 sin_fecha += 1
             continue
+        if actividad.situacion == "pendiente" and fecha != dia:
+            # Sin fecha: hoy o un día futuro (no se puede hacer en el pasado); con fecha: ese día,
+            # o hoy si la fecha ya pasó y sigue pendiente
+            if (not fecha and dia < hoy) or (fecha and not (fecha < hoy and dia == hoy)):
+                pendientes_otros_dias += 1
+                continue
+            if fecha:
+                notas[codigo] = f"Pendiente desde el {fecha}"
         del_dia.append(actividad)
 
         edicion = ediciones.get(codigo)
@@ -234,7 +329,7 @@ def plan_del_dia(
             notas[codigo] = f"Estaba asignada a {responsable or 'otro responsable'}; la app la reasigna"
             continue
 
-        mencionados = tecnicos_mencionados(actividad.asignado_a, tecnicos)
+        mencionados = responsables(actividad, tecnicos, ids_electricistas or {})
         if mencionados:
             en_turno = [t for t in mencionados if t.id in ids_disponibles]
             if en_turno:
@@ -251,11 +346,21 @@ def plan_del_dia(
             fijas[codigo] = f"empresa:{empresa}"
             notas[codigo] = f"Asignada en Metabase a {actividad.contratista_asignado}"
             continue
-        if actividad.asignado_a and actividad.contratista_asignado:
+        if actividad.asignado_a and es_de_bia(actividad.contratista_asignado):
+            # Técnico de Bia que no está en la lista de la app: no es externo, falta registrarlo
+            responsable = f"{actividad.asignado_a} (Bia, sin registrar en la app)"
+            sin_registrar[actividad.asignado_a] = sin_registrar.get(actividad.asignado_a, 0) + 1
+        elif actividad.asignado_a and actividad.contratista_asignado:
             responsable = f"{actividad.asignado_a} ({actividad.contratista_asignado})"
         externas[codigo] = responsable or "Responsable sin registrar en Metabase"
 
-    metricas = {"dia": dia, "ots_otros_dias": otros_dias, "asignadas_sin_fecha": sin_fecha}
+    metricas = {
+        "dia": dia,
+        "ots_otros_dias": otros_dias,
+        "asignadas_sin_fecha": sin_fecha,
+        "pendientes_otros_dias": pendientes_otros_dias,
+        "bia_sin_registrar": sorted(sin_registrar),
+    }
     return del_dia, fijas, externas, notas, parejas, metricas
 
 
@@ -429,19 +534,20 @@ async def asignar(request: AsignarRequest):
     if not tecnicos and request.modo == "inhouse":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un técnico")
 
+    # Las personas por tipo van antes del plan: deciden cuántos de los electricistas listados cuentan
+    personas = {normalizar_texto(k): v for k, v in request.personas_por_tipo.items()}
+    for actividad in actividades:
+        actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
+
     dia = request.dia or date.today().isoformat()
     actividades, fijas, externas, notas, parejas, metricas_dia = plan_del_dia(
-        actividades, dia, request.fijas, config.tecnicos, tecnicos, sedes
+        actividades, dia, request.fijas, config.tecnicos, tecnicos, sedes, aprender_ids(actividades, config)
     )
     if not actividades:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"No hay OTs pendientes ni asignadas para el {dia}",
         )
-
-    personas = {normalizar_texto(k): v for k, v in request.personas_por_tipo.items()}
-    for actividad in actividades:
-        actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
 
     # Parejas a mano primero; luego las que ya salen juntas en Metabase, si no chocan
     seleccionados = {t.id for t in tecnicos}
@@ -483,6 +589,8 @@ async def asignar(request: AsignarRequest):
         notas=notas,
         coberturas=coberturas,
         matriz=matriz,
+        uso_previo=request.uso_previo,
+        disponible_previo=request.disponible_previo,
         jornada=jornada,
     )
     try:

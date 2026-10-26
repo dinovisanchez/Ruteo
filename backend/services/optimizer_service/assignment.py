@@ -18,7 +18,6 @@ from shared.models import (
     CrewRoute,
     GPSCoordinates,
     JornadaConfig,
-    MatrizVial,
     OperadorRed,
     OpcionContratista,
     RecomendacionContratista,
@@ -26,10 +25,10 @@ from shared.models import (
     RutaAsignada,
     SedeOperativa,
     Tecnico,
-    ZonaTransito,
 )
 from shared.operadores import clave, normalizar_departamento, resolver_or
-from shared.zonas import atiende_or, en_zona, recargo_transito
+from shared.distancias import Distancias
+from shared.zonas import atiende_or, en_zona
 from shared.config import settings
 from shared.utils import (
     add_minutes_to_time,
@@ -50,64 +49,6 @@ PESO_RUTA_MAS_LARGA = 10
 # Costo por minuto que una ruta supera la carga promedio de su base (segunda pasada)
 PESO_EXCESO_META = 20
 MAX_ALTERNATIVAS = 3
-# Sin OSRM, los primeros km de cada desplazamiento son urbanos y el resto es carretera
-KM_URBANOS = 15
-
-
-class Distancias:
-    """Distancia y tiempo de desplazamiento entre dos puntos.
-
-    Con la matriz de OSRM se usan los km y minutos por las vías; sin ella (o para
-    puntos que no están en la matriz), la línea recta × factor vial, con los primeros
-    km a la velocidad promedio y el resto a la de carretera. Al tiempo se le suma el recargo de tránsito de la zona donde empieza
-    o termina el desplazamiento (el mayor de las dos).
-    """
-
-    def __init__(self, jornada: JornadaConfig, matriz: Optional[MatrizVial] = None):
-        self.factor = jornada.factor_vial
-        self.velocidad = jornada.velocidad_promedio_kmh
-        self.velocidad_carretera = jornada.velocidad_carretera_kmh
-        self.zonas = jornada.zonas_transito
-        self.matriz = matriz
-        self._indice = {self._clave(lat, lon): i for i, (lat, lon) in enumerate(matriz.puntos)} if matriz else {}
-        self._zona: Dict[Tuple[float, float], Optional[ZonaTransito]] = {}
-
-    @staticmethod
-    def _clave(lat: float, lon: float) -> Tuple[float, float]:
-        return (round(lat, 5), round(lon, 5))
-
-    def _vial(self, a: GPSCoordinates, b: GPSCoordinates, campo: str) -> Optional[float]:
-        i = self._indice.get(self._clave(a.latitude, a.longitude))
-        j = self._indice.get(self._clave(b.latitude, b.longitude))
-        if i is None or j is None:
-            return None
-        return getattr(self.matriz, campo)[i][j]
-
-    def zona(self, punto: GPSCoordinates) -> Optional[ZonaTransito]:
-        clave_punto = self._clave(punto.latitude, punto.longitude)
-        if clave_punto not in self._zona:
-            self._zona[clave_punto] = recargo_transito(self.zonas, punto)
-        return self._zona[clave_punto]
-
-    def km(self, a: GPSCoordinates, b: GPSCoordinates) -> float:
-        vial = self._vial(a, b, "km")
-        return vial if vial is not None else haversine_distance(a, b) * self.factor
-
-    def minutos(self, a: GPSCoordinates, b: GPSCoordinates) -> int:
-        vial = self._vial(a, b, "minutos")
-        if vial is not None:
-            base = vial
-        else:
-            km = haversine_distance(a, b) * self.factor
-            urbanos = min(km, KM_URBANOS)
-            carretera = max(self.velocidad, self.velocidad_carretera)
-            base = urbanos / self.velocidad * 60 + (km - urbanos) / carretera * 60
-        if base <= 0:
-            return 0
-        zonas = [z for z in (self.zona(a), self.zona(b)) if z]
-        if zonas:
-            base = base * (1 + max(z.recargo_pct for z in zonas) / 100) + max(z.minutos_extra for z in zonas)
-        return int(math.ceil(base))
 
 
 def _tiempos_servicio(jornada: JornadaConfig) -> Dict[str, int]:
@@ -216,6 +157,22 @@ def _resolver_vrp(
     return rutas, descartadas, minutos
 
 
+def _metas_parejas(minutos_hoy: float, previos: List[float]) -> List[int]:
+    """Minutos de hoy para cada vehículo de modo que lo que ya lleva + lo de hoy quede parejo.
+
+    Es un llenado por niveles: se busca el nivel N tal que la suma de max(0, N - previo)
+    sea igual a los minutos de hoy; quien lleva menos recibe más.
+    """
+    bajo, alto = min(previos), max(previos) + minutos_hoy
+    for _ in range(60):
+        medio = (bajo + alto) / 2
+        if sum(max(0.0, medio - previo) for previo in previos) < minutos_hoy:
+            bajo = medio
+        else:
+            alto = medio
+    return [max(0, math.ceil(alto - previo)) for previo in previos]
+
+
 def _resolver_balanceado(
     actividades: List[Activity],
     inicios: List[GPSCoordinates],
@@ -225,12 +182,14 @@ def _resolver_balanceado(
     limite_segundos: int,
     permitidos: Optional[List[Optional[List[int]]]] = None,
     fijadas: Optional[Set[int]] = None,
+    previos: Optional[List[float]] = None,
 ) -> Tuple[List[List[int]], List[int]]:
     """Como `_resolver_vrp`, pero reparte la carga entre los vehículos de un mismo grupo (base).
 
-    Primero resuelve sin metas; luego vuelve a resolver con la carga promedio de
-    cada grupo como meta. Se queda con la segunda solución si no deja más OTs
-    sin asignar.
+    Primero resuelve sin metas; luego vuelve a resolver con una meta de minutos por
+    vehículo: la carga promedio del grupo o, con `previos` (minutos que cada uno ya
+    trabajó en la semana), la que deja la semana pareja. Se queda con la segunda
+    solución si no deja más OTs sin asignar.
     """
     rutas, descartadas, minutos = _resolver_vrp(
         actividades, inicios, jornada, dist, limite_segundos, permitidos=permitidos, fijadas=fijadas
@@ -243,10 +202,15 @@ def _resolver_balanceado(
 
     metas: List[Optional[int]] = [None] * len(inicios)
     for vehiculos in por_grupo.values():
-        if len(vehiculos) >= 2:
-            meta = math.ceil(sum(minutos[v] for v in vehiculos) / len(vehiculos))
-            for v in vehiculos:
+        if len(vehiculos) < 2:
+            continue
+        total = sum(minutos[v] for v in vehiculos)
+        if previos:
+            for v, meta in zip(vehiculos, _metas_parejas(total, [previos[v] for v in vehiculos])):
                 metas[v] = meta
+        else:
+            for v in vehiculos:
+                metas[v] = math.ceil(total / len(vehiculos))
     rutas_b, descartadas_b, _ = _resolver_vrp(
         actividades, inicios, jornada, dist, limite_segundos, metas, permitidos, fijadas
     )
@@ -452,6 +416,10 @@ def _asignar_inhouse(
         permitidos.append(lista)
     fijadas = {i for i, a in enumerate(atendibles) if a.codigo_bia in fijas}
     inicios = [sedes[c[0].base_id].coordinates for c in cuadrillas]
+    # Lo que cada cuadrilla ya trabajó en la semana (promedio de sus integrantes)
+    previos = [
+        sum(request.uso_previo.get(t.id, 0) for t in c) / len(c) for c in cuadrillas
+    ] if request.uso_previo else None
 
     def resolver(indices: List[int], vehiculos: List[int]) -> Tuple[Dict[int, List[int]], List[int]]:
         """Resuelve solo esas actividades con esas cuadrillas; índices sobre `atendibles`"""
@@ -476,6 +444,7 @@ def _asignar_inhouse(
             _limite_solver(len(sub)),
             sub_permitidos,
             {k for k, i in enumerate(sub) if i in fijadas},
+            [previos[v] for v in vehiculos] if previos else None,
         )
         for k, ruta in enumerate(rutas_sub):
             rutas[vehiculos[k]] = [sub[j] for j in ruta]
@@ -777,6 +746,7 @@ def _decisiones(
     sin_asignar: List[ActividadSinAsignar],
     motivos_previos: Dict[str, str],
     fijadas: Set[str],
+    sin_ubicacion: Optional[List[DecisionOT]] = None,
 ) -> List[DecisionOT]:
     """Una decisión por OT: a quién enviarla y por qué, en el orden en que llegaron"""
     dist = Distancias(request.jornada, request.matriz)
@@ -797,6 +767,10 @@ def _decisiones(
                     motivo = f"Fijada a {asignada.responsable}; a {km:g} km de {sede.empresa}"
                 else:
                     motivo = f"A {km:g} km de {sede.empresa}; cabe en la jornada de {asignada.responsable}"
+                    if request.uso_previo and request.disponible_previo:
+                        integrantes = asignada.responsable_id.split("+")
+                        uso = sum(request.uso_previo.get(i, 0) for i in integrantes) / len(integrantes)
+                        motivo += f", que lleva {round(uso / request.disponible_previo * 100)} % de UTR en la semana"
                 if not asignada.ruta.viable:
                     motivo += ". Su ruta pasa de la jornada: revisa la carga de este técnico"
             decisiones[actividad.codigo_bia] = DecisionOT(
@@ -809,6 +783,9 @@ def _decisiones(
                 hora_llegada=parada.hora_llegada_estimada,
                 motivo=motivo,
             )
+
+    for decision in sin_ubicacion or []:
+        decisiones[decision.codigo_bia] = decision
 
     for item in sin_asignar:
         decisiones[item.actividad.codigo_bia] = DecisionOT(
@@ -845,6 +822,7 @@ def _resultado(
     extra: Dict,
     motivos_previos: Dict[str, str],
     fijadas: Set[str],
+    sin_ubicacion: Optional[List[DecisionOT]] = None,
 ) -> AssignmentResult:
     distancia = round(sum(r.ruta.distancia_total_km for r in rutas), 2)
     asignadas = sum(len(r.ruta.paradas) for r in rutas)
@@ -868,7 +846,7 @@ def _resultado(
         modo=request.modo,
         total_actividades=len(request.actividades),
         rutas=rutas,
-        decisiones=_decisiones(request, rutas, recomendaciones, sin_asignar, motivos_previos, fijadas),
+        decisiones=_decisiones(request, rutas, recomendaciones, sin_asignar, motivos_previos, fijadas, sin_ubicacion),
         recomendaciones=recomendaciones,
         sin_asignar=sin_asignar,
         distancia_total_km=distancia,
@@ -919,13 +897,37 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
     empresas = {s.empresa_id for s in request.sedes if s.tipo == "contratista"}
     dist = Distancias(request.jornada, request.matriz)
 
-    actividades, sin_asignar = _separar_sin_coordenadas(
+    actividades, sin_coordenadas = _separar_sin_coordenadas(
         [a for a in request.actividades if a.codigo_bia not in request.externas]
     )
     motivos_previos: Dict[str, str] = {}
     fijas_tecnico: Dict[str, str] = {}
     fijas_empresa: Dict[str, str] = {}
     fijadas: Set[str] = set()
+
+    # Sin ubicación no hay ruta posible, pero la OT fijada a alguien sigue siendo de esa persona
+    sin_asignar: List[ActividadSinAsignar] = []
+    sin_ubicacion: List[DecisionOT] = []
+    nombre_tecnico = {t.id: t.nombre for t in tecnicos}
+    nombre_empresa = {s.empresa_id: s.empresa for s in request.sedes if s.tipo == "contratista"}
+    for item in sin_coordenadas:
+        codigo = item.actividad.codigo_bia
+        tipo, _, destino = request.fijas.get(codigo, "").partition(":")
+        if tipo == "tecnico" and destino in nombre_tecnico:
+            enviar_a, responsable = "tecnico", nombre_tecnico[destino]
+        elif tipo == "empresa" and destino in nombre_empresa:
+            enviar_a, responsable = "contratista", nombre_empresa[destino]
+        else:
+            sin_asignar.append(item)
+            continue
+        fijadas.add(codigo)
+        sin_ubicacion.append(DecisionOT(
+            codigo_bia=codigo,
+            enviar_a=enviar_a,
+            responsable_id=destino,
+            responsable=responsable,
+            motivo=f"Fijada a {responsable}. No tiene ubicación: no entra en la ruta ni en el mapa",
+        ))
     para_tecnicos: List[Activity] = []
     para_contratistas: List[Activity] = []
     libres: List[Activity] = []
@@ -951,7 +953,7 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
             continue
         fijadas.add(codigo)
 
-    extra: Dict = {"tecnicos_disponibles": len(tecnicos)}
+    extra: Dict = {"tecnicos_disponibles": len(tecnicos), "reparto_por_semana": bool(request.uso_previo)}
     if request.modo == "contratistas":
         para_contratistas += libres
     elif request.modo == "inhouse":
@@ -1021,4 +1023,5 @@ def asignar(request: AssignmentRequest) -> AssignmentResult:
         rutas += rutas_contratistas
         extra.update(extra_contratistas)
 
-    return _resultado(request, rutas, recomendaciones, sin_asignar, extra, motivos_previos, fijadas)
+    extra["ots_sin_ubicacion"] = len(sin_ubicacion)
+    return _resultado(request, rutas, recomendaciones, sin_asignar, extra, motivos_previos, fijadas, sin_ubicacion)
