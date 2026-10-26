@@ -79,6 +79,8 @@ class Settings(BaseSettings):
 
     # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
     OSRM_URL: str = "https://router.project-osrm.org"
+    # Si el principal no responde se usa este (el OSRM de FOSSGIS que usa openstreetmap.org)
+    OSRM_URL_RESPALDO: str = "https://routing.openstreetmap.de/routed-car"
     # El servidor público de OSRM pide máximo una consulta por segundo
     OSRM_PAUSA_SEGUNDOS: float = 1.0
 

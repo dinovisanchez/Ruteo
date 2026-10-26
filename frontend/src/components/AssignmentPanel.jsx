@@ -5,9 +5,7 @@ import {
   Button, Input, Space, Switch, InputNumber, Alert, Select, Segmented, Tag, Typography,
   Form, TimePicker, Collapse, Upload, notification, message,
 } from 'antd';
-import {
-  UploadOutlined, WarningOutlined, SaveOutlined, TeamOutlined, ShopOutlined, ToolOutlined, SettingOutlined,
-} from '@ant-design/icons';
+import { UploadOutlined, WarningOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
 import TechniciansModal from './TechniciansModal';
@@ -46,13 +44,6 @@ const countBy = (items, key) => {
   return counts;
 };
 
-const SectionLabel = ({ icon, title }) => (
-  <span className="ios-section-label">
-    <span className="ios-section-icon">{icon}</span>
-    {title}
-  </span>
-);
-
 /**
  * Settings of the plan, in collapsible sections. The header calls `extract` and `recalc`
  * through the ref; `onStateChange` tells it whether they can run.
@@ -62,7 +53,10 @@ const AssignmentPanel = forwardRef(({
 }, ref) => {
   const [form] = Form.useForm();
   const [status, setStatus] = useState(null);
+  // Question used to extract; it is not shown, only replaced from Ajustes
   const [cardId, setCardId] = useState('');
+  const [cambiandoPregunta, setCambiandoPregunta] = useState(false);
+  const [nuevaPregunta, setNuevaPregunta] = useState('');
   const [fetching, setFetching] = useState(false);
   const [fetchInfo, setFetchInfo] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -88,7 +82,10 @@ const AssignmentPanel = forwardRef(({
       .then((s) => {
         setStatus(s);
         if (s.card_id) setCardId(s.card_id);
-        else setAbiertas(['ajustes']);
+        else {
+          setAbiertas(['ajustes']);
+          setCambiandoPregunta(true);
+        }
       })
       .catch(() => setStatus({ configurado: false, sinBackend: true }));
     getAssignmentConfig().then(onConfigChange).catch((e) => message.error(`No se pudo leer la configuración: ${e.message}`));
@@ -203,7 +200,7 @@ const AssignmentPanel = forwardRef(({
       writeKnownOts([...knownRef.current]);
 
       setFetchInfo(data);
-      onOtsLoaded(data.actividades, nuevas, `Pregunta #${data.card_id}`, data.mapeo);
+      onOtsLoaded(data.actividades, nuevas, 'Metabase', data.mapeo);
       if (nuevas.size && silent) {
         notification.info({
           message: `Llegaron ${nuevas.size} OTs nuevas`,
@@ -247,9 +244,12 @@ const AssignmentPanel = forwardRef(({
 
   const saveDefaultCard = async () => {
     try {
-      const saved = await saveAssignmentConfig({ ...config, card_id: cardId.trim() || null });
+      const saved = await saveAssignmentConfig({ ...config, card_id: nuevaPregunta.trim() || null });
       onConfigChange(saved);
-      message.success(`Pregunta #${saved.card_id} guardada como predeterminada`);
+      setCardId(saved.card_id || '');
+      setNuevaPregunta('');
+      setCambiandoPregunta(false);
+      message.success('Pregunta guardada');
     } catch (error) {
       message.error(error.message);
     }
@@ -328,10 +328,10 @@ const AssignmentPanel = forwardRef(({
           ? `${cuadrillasManuales.length} pareja(s) armadas a mano; con el resto se arman las que pidan las OTs de 2 personas.`
           : 'Las parejas para OTs de 2 personas se arman solas (o como ya salen en Metabase).'}
       </Text>
-      <Space wrap size={6} style={{ marginTop: 8 }}>
-        <Button size="small" shape="round" onClick={() => setTechModalOpen(true)}>Gestionar técnicos</Button>
+      <Space wrap size={0} style={{ marginTop: 4, marginLeft: -8 }}>
+        <Button size="small" type="link" onClick={() => setTechModalOpen(true)}>Gestionar técnicos</Button>
         {tecnicosFaltantes.length > 0 && (
-          <Button size="small" shape="round" type="dashed" onClick={addSheetTechnicians}>
+          <Button size="small" type="link" onClick={addSheetTechnicians}>
             Agregar {tecnicosFaltantes.length} de la hoja
           </Button>
         )}
@@ -364,7 +364,7 @@ const AssignmentPanel = forwardRef(({
           Cada OT va al contratista más cercano con sede en los departamentos que atiende su OR.
         </Text>
       )}
-      <Button size="small" shape="round" style={{ marginTop: 8 }} onClick={() => setOrModalOpen(true)}>Editar contratistas</Button>
+      <Button size="small" type="link" style={{ marginTop: 8 }} onClick={() => setOrModalOpen(true)}>Editar contratistas</Button>
     </>
   );
 
@@ -389,7 +389,7 @@ const AssignmentPanel = forwardRef(({
       ) : (
         <Text type="secondary" className="ios-footnote">Aparecen al extraer las OTs.</Text>
       )}
-      <Button size="small" shape="round" style={{ marginTop: 8 }} onClick={() => setTypesModalOpen(true)} disabled={!services.length}>
+      <Button size="small" type="link" style={{ marginTop: 8 }} onClick={() => setTypesModalOpen(true)} disabled={!services.length}>
         Editar duración y personas
       </Button>
     </>
@@ -397,22 +397,34 @@ const AssignmentPanel = forwardRef(({
 
   const ajustesSection = (
     <>
-      <div className="ios-field-label">Pregunta de Metabase</div>
-      <Space.Compact style={{ width: '100%' }}>
-        <Input
-          value={cardId}
-          placeholder="Número de la pregunta"
-          onChange={(e) => setCardId(e.target.value)}
-          prefix={<Text type="secondary">#</Text>}
-        />
-        <Button icon={<SaveOutlined />} onClick={saveDefaultCard} disabled={!cardId.trim() || cardId.trim() === savedCard}>
-          Predeterminar
-        </Button>
-      </Space.Compact>
-      <Text type="secondary" className="ios-footnote">
-        {status?.servidor ? `${status.servidor} · ` : ''}
-        {savedCard ? `Predeterminada: #${savedCard}` : 'Guarda el número para no escribirlo cada vez'}
-      </Text>
+      <div className="ios-field-label">Fuente de datos</div>
+      <div className="ios-list">
+        <div className="ios-row">
+          <div className="ios-row-main">
+            <div className="ios-row-title">Metabase</div>
+            <div className="ios-row-sub">
+              {!status?.configurado ? 'Sin configurar en backend/.env' : (savedCard ? 'Conectado' : 'Falta la pregunta')}
+            </div>
+          </div>
+          {status?.configurado && (
+            <Button size="small" type="link" onClick={() => { setCambiandoPregunta((v) => !v); setNuevaPregunta(''); }}>
+              {cambiandoPregunta ? 'Cancelar' : (savedCard ? 'Cambiar pregunta' : 'Elegir pregunta')}
+            </Button>
+          )}
+        </div>
+      </div>
+      {cambiandoPregunta && (
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            autoFocus
+            value={nuevaPregunta}
+            placeholder="Número de la nueva pregunta"
+            onChange={(e) => setNuevaPregunta(e.target.value)}
+            onPressEnter={saveDefaultCard}
+          />
+          <Button type="primary" onClick={saveDefaultCard} disabled={!nuevaPregunta.trim()}>Guardar</Button>
+        </Space.Compact>
+      )}
       <Space style={{ marginTop: 8 }} size={6} wrap>
         <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} disabled={!status?.configurado} />
         <Text style={{ fontSize: 13 }}>Actualizar cada</Text>
@@ -462,7 +474,7 @@ const AssignmentPanel = forwardRef(({
               value={z.recargo_pct}
               onChange={(v) => updateTransito(z.nombre, 'recargo_pct', v)}
               addonAfter="%"
-              style={{ width: 92 }}
+              style={{ width: 80 }}
             />
             <InputNumber
               size="small"
@@ -471,7 +483,7 @@ const AssignmentPanel = forwardRef(({
               value={z.minutos_extra}
               onChange={(v) => updateTransito(z.nombre, 'minutos_extra', v)}
               addonAfter="min"
-              style={{ width: 100 }}
+              style={{ width: 88 }}
             />
           </div>
         ))}
@@ -559,7 +571,7 @@ const AssignmentPanel = forwardRef(({
         />
       )}
       {status?.configurado && !savedCard && (
-        <Alert type="info" showIcon className="ios-alert" message="Indica la pregunta de Metabase en Ajustes y pulsa Predeterminar" />
+        <Alert type="info" showIcon className="ios-alert" message="Elige la pregunta de Metabase en Ajustes → Fuente de datos" />
       )}
       {fetchInfo && (fetchInfo.geocodificadas > 0 || fetchInfo.sin_coordenadas > 0) && (
         <Text type="secondary" className="ios-footnote" style={{ margin: '0 4px 10px' }}>
@@ -578,25 +590,25 @@ const AssignmentPanel = forwardRef(({
         items={[
           {
             key: 'tecnicos',
-            label: <SectionLabel icon={<TeamOutlined />} title="Técnicos" />,
+            label: 'Técnicos',
             extra: <Text type="secondary">{disponibles.length} de {tecnicosActivos.length} · {dayjs(dia).format('ddd D')}</Text>,
             children: tecnicosSection,
           },
           {
             key: 'contratistas',
-            label: <SectionLabel icon={<ShopOutlined />} title="Contratistas por OR" />,
+            label: 'Contratistas por OR',
             extra: orRows.length ? <Text type="secondary">{orRows.length} OR</Text> : null,
             children: contratistasSection,
           },
           {
             key: 'tipos',
-            label: <SectionLabel icon={<ToolOutlined />} title="Tipos de OT" />,
+            label: 'Tipos de OT',
             extra: services.length ? <Text type="secondary">{services.length}</Text> : null,
             children: tiposSection,
           },
           {
             key: 'ajustes',
-            label: <SectionLabel icon={<SettingOutlined />} title="Ajustes" />,
+            label: 'Ajustes',
             forceRender: true,
             children: ajustesSection,
           },

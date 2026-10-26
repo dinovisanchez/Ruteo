@@ -24,6 +24,7 @@ from shared.models import (
     AssignmentRequest,
     AssignmentResult,
     JornadaConfig,
+    MatrizVial,
     ModoAsignacion,
     OperadorRed,
     CoberturaEquipo,
@@ -34,7 +35,7 @@ from shared.models import (
 from shared.utils import setup_logging
 from . import metabase
 from .geocoding import geocodificar
-from .trazado import matriz_vial, trazar
+from . import trazado
 
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
@@ -139,6 +140,8 @@ class AsignarRequest(BaseModel):
     fijas: Dict[str, str] = Field(default_factory=dict)
     # Zonas de tránsito con el recargo editado en la app; vacío = las de data/zonas_bia.json
     transito: List[ZonaTransito] = Field(default_factory=list)
+    # Tiempos por las vías que trae el navegador cuando el backend no llega a OSRM
+    matriz: Optional[MatrizVial] = None
     jornada: JornadaConfig = Field(default_factory=JornadaConfig)
 
 
@@ -462,7 +465,10 @@ async def asignar(request: AsignarRequest):
                 pass
         if actividad.coordinates is not None:
             puntos.append([actividad.coordinates.latitude, actividad.coordinates.longitude])
-    matriz, aviso_vias = await matriz_vial(puntos)
+    if request.matriz is not None:
+        matriz, aviso_vias = request.matriz, None
+    else:
+        matriz, aviso_vias = await trazado.matriz_vial(puntos)
 
     pedido = AssignmentRequest(
         modo=request.modo,
@@ -496,7 +502,19 @@ async def asignar(request: AsignarRequest):
     resultado.metricas["transito"] = [
         {"nombre": z.nombre, "recargo_pct": z.recargo_pct, "minutos_extra": z.minutos_extra} for z in jornada.zonas_transito
     ]
+    # El mapa pide estas mismas rutas; se trazan ya para que estén listas al abrirlo
+    trazado.precargar([puntos_ruta(r, jornada.incluir_retorno) for r in resultado.rutas])
     return resultado
+
+
+def puntos_ruta(asignada, incluir_retorno: bool) -> List[List[float]]:
+    """Base, paradas y regreso, igual que los manda el mapa"""
+    base = [asignada.sede.coordinates.latitude, asignada.sede.coordinates.longitude]
+    paradas = [
+        [p.actividad.coordinates.latitude, p.actividad.coordinates.longitude]
+        for p in asignada.ruta.paradas if p.actividad.coordinates
+    ]
+    return [base, *paradas, base] if incluir_retorno and paradas else [base, *paradas]
 
 
 @router.post("/rutas/trazado", response_model=dict)
@@ -505,18 +523,21 @@ async def trazado_rutas(request: TrazadoRequest):
     Geometría por vías (OSRM) de cada ruta, para dibujarla en el mapa siguiendo las calles.
     Las rutas que no se pueden trazar no vienen en la respuesta: el mapa las deja en línea recta.
     """
-    if not settings.OSRM_URL:
-        return {"rutas": {}, "aviso": "OSRM_URL está vacío: las rutas se dibujan en línea recta"}
+    if not trazado.servidores():
+        return {"rutas": {}, "aviso": "OSRM_URL está vacío en backend/.env"}
     rutas = {}
-    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+    async with httpx.AsyncClient(timeout=trazado.TIMEOUT) as client:
         for ruta in request.rutas:
             if len(ruta.puntos) < 2:
                 continue
-            try:
-                trazo = await trazar(client, ruta.puntos)
-            except httpx.HTTPError as e:
-                logger.warning(f"OSRM no respondió ({settings.OSRM_URL}): {e}")
-                return {"rutas": rutas, "aviso": f"No se pudo consultar OSRM en {settings.OSRM_URL}"}
+            trazo = await trazado.trazar(client, ruta.puntos)
             if trazo:
                 rutas[ruta.id] = {"geometria": trazo[0], "km": trazo[1]}
-    return {"rutas": rutas}
+    faltan = [r.id for r in request.rutas if len(r.puntos) >= 2 and r.id not in rutas]
+    return {"rutas": rutas, "aviso": trazado.ultimo_error if faltan else None}
+
+
+@router.get("/rutas/estado", response_model=dict)
+async def estado_rutas():
+    """¿El backend llega a OSRM? Prueba un trazado corto y dice qué servidor respondió o por qué falló"""
+    return await trazado.estado()

@@ -294,16 +294,16 @@ BIA003,instalacion,"4.6200,-74.0900",Cliente 3,Carrera 789 #12-34,Bogotá,Cundin
 
 ## 🚀 Uso de la Aplicación
 
-Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige el día y la vista (*Lista*, *Mapa*, *Rutas* o *Metabase* con todas las columnas de la pregunta). A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*.
+Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*.
 
 ### Plan del día
 
-- **Día a día.** Arriba eliges el día (flechas o calendario). El plan toma las OTs **ya asignadas** en Metabase para esa fecha y las **pendientes por asignar**, y las reparte en rutas.
+- **Día a día.** En la barra de filtros eliges el día (flechas o calendario). El plan toma las OTs **ya asignadas** en Metabase para esa fecha y las **pendientes por asignar**, y las reparte en rutas.
 - **Ya asignadas.** Si en Metabase la OT está asignada a un técnico de la app (se reconoce por el nombre en *Electricistas asignados*, aunque venga en mayúsculas o con el segundo nombre) y ese técnico está **marcado como disponible**, la OT se queda con él y entra en su ruta (candado en la tabla). Si no está disponible, la app la reasigna. Si está asignada a un contratista del catálogo, se queda con ese contratista; si el responsable no está en la app, aparece como **Externo** y no entra en las rutas.
 - **Pendientes.** La app sugiere a quién enviarlas con las reglas de abajo, llenando la jornada de los técnicos disponibles junto con lo que ya tienen asignado.
-- **Filtro.** *Todas · Ya asignadas · Por asignar* filtra la tabla, el mapa y las rutas.
+- **Filtros.** Buscar por nombre (cliente, OT, dirección, técnico o contratista), fecha, *Todas · Por asignar · Asignadas* y *Asignado a* (un técnico, un contratista o un externo). Filtran la lista, el mapa, las rutas y la tabla completa.
 - **Editar.** En la columna *Enviar a* cada OT tiene un selector: *Que decida la app*, un técnico disponible, *El más cercano de su OR* o un contratista concreto. Al cambiarlo la app recalcula el plan respetando la edición (etiqueta *Editada*); *Quitar ediciones* vuelve a la sugerencia. Si una OT fijada no cabe en la jornada de su técnico, la ruta se marca como *Supera la jornada* y las demás OTs pasan a otros técnicos o contratistas.
-- **Mapa por vías.** Cada ruta se dibuja siguiendo las calles con OSRM (servidor público `router.project-osrm.org` por defecto; `OSRM_URL` en `backend/.env`). Las líneas aparecen punteadas y se vuelven continuas cuando llega el trazado; si OSRM no responde, quedan en línea recta. Los cuadrados son OTs ya asignadas y los círculos, sugeridas.
+- **Mapa por carretera.** Cada ruta se dibuja siguiendo las vías con OSRM: el servidor público `router.project-osrm.org` y, si no responde, el de OpenStreetMap (`OSRM_URL` y `OSRM_URL_RESPALDO` en `backend/.env`). El backend traza las rutas apenas se calcula el plan, así que el mapa suele abrir ya trazado. Si el backend no llega a OSRM (por ejemplo, por un proxy), el navegador consulta directo, tanto el trazado como los tiempos por carretera. Mientras traza se ve "Trazando por carretera · n/m"; si una ruta no se puede trazar, el mapa dice por qué. `GET /api/rutas/estado` dice si el backend llega a OSRM. Los cuadrados son OTs ya asignadas y los círculos, sugeridas.
 
 ### Cómo decide (modo automático)
 
@@ -344,7 +344,7 @@ METABASE_URL=https://metabase.tu-empresa.com
 METABASE_API_KEY=...            # o METABASE_USERNAME / METABASE_PASSWORD
 ```
 
-El número de la pregunta se escribe en *Ajustes* y se guarda con **Predeterminar** (también se puede poner en `METABASE_CARD_ID`). La pregunta necesita una columna con el OR; el código de la OT (`Bia Code`, `OT`…) es recomendable. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Ciudad`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**. Los nombres de columna en español se reconocen solos; si no, defínelos con `METABASE_COLUMN_MAP`. Para el plan del día, la pregunta debe traer también las OTs asignadas con *Situación*, *Fecha de la visita*, *Electricistas asignados* y *Contratista asignado*. Esta consulta SQL sobre `operations.visitas_general` sirve:
+La pregunta se elige en *Ajustes → Fuente de datos → Cambiar pregunta* (también se puede poner en `METABASE_CARD_ID`); la app no muestra su número. La pregunta necesita una columna con el OR; el código de la OT (`Bia Code`, `OT`…) es recomendable. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Ciudad`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**. Los nombres de columna en español se reconocen solos; si no, defínelos con `METABASE_COLUMN_MAP`. Para el plan del día, la pregunta debe traer también las OTs asignadas con *Situación*, *Fecha de la visita*, *Electricistas asignados* y *Contratista asignado*. Esta consulta SQL sobre `operations.visitas_general` sirve:
 
 ```sql
 SELECT
@@ -388,7 +388,7 @@ Con *Extraer y recomendar cada N min* la app vuelve a traer la pregunta sola y m
 
 > Para decidir y estimar horarios, las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*); el mapa sí dibuja la ruta por las vías.
 
-Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/rutas/trazado`, `GET /api/zonas`.
+Endpoints: `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/rutas/trazado`, `GET /api/rutas/estado`, `GET /api/zonas`.
 
 ---
 

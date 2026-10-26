@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tag, Tooltip,
+  Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tooltip, Input, Select,
 } from 'antd';
 import {
-  LeftOutlined, RightOutlined, UndoOutlined, ThunderboltFilled, ReloadOutlined, UnorderedListOutlined,
-  EnvironmentOutlined, NodeIndexOutlined, TableOutlined,
+  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -12,6 +11,8 @@ import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
 import OtsTable from './components/OtsTable';
 import { assignActivities, getCatalog, getZones } from './services/api';
+import { matrizPorVias } from './services/osrm';
+import { normalizeText } from './services/otTypes';
 
 import './App.css';
 
@@ -20,6 +21,42 @@ const { Header, Content, Sider } = Layout;
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
 const ISO_DAY = 'YYYY-MM-DD';
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Everything the name search looks at
+const searchText = (codigo, actividad, responsable) => normalizeText([
+  codigo, actividad?.nombre, actividad?.direccion, actividad?.ciudad, actividad?.servicio, actividad?.or_operador,
+  responsable, actividad?.asignado_a, actividad?.contratista_asignado,
+].filter(Boolean).join(' '));
+
+// "Asignado a" options come from who has OTs in the plan: technicians one by one, contractors by company
+const assigneeOptions = (result) => {
+  if (!result) return [];
+  const tecnicos = new Set();
+  const contratistas = new Set();
+  result.rutas.forEach((r) => {
+    if (r.tipo === 'tecnico') r.integrantes.forEach((n) => tecnicos.add(n));
+    else contratistas.add(r.sede.empresa);
+  });
+  const externos = new Set(result.decisiones.filter((d) => d.enviar_a === 'externo').map((d) => d.responsable));
+  const grupos = [
+    { label: 'Técnicos Bia', options: [...tecnicos].sort().map((n) => ({ value: `t:${n}`, label: n })) },
+    { label: 'Contratistas', options: [...contratistas].sort().map((n) => ({ value: `c:${n}`, label: n })) },
+    { label: 'Externos', options: [...externos].sort().map((n) => ({ value: `e:${n}`, label: n })) },
+  ];
+  if (result.decisiones.some((d) => d.enviar_a === 'sin_asignar')) {
+    grupos.push({ label: 'Otros', options: [{ value: 'sin', label: 'Sin asignar' }] });
+  }
+  return grupos.filter((g) => g.options.length);
+};
+
+const matchesAssignee = (decision, value) => {
+  if (!value) return true;
+  if (value === 'sin') return decision.enviar_a === 'sin_asignar';
+  const nombre = value.slice(2);
+  if (value.startsWith('t:')) return decision.enviar_a === 'tecnico' && (decision.responsable || '').split(' + ').includes(nombre);
+  if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
+  return decision.enviar_a === 'externo' && decision.responsable === nombre;
+};
 
 function App() {
   const [loading, setLoading] = useState(false);
@@ -36,10 +73,14 @@ function App() {
   const [zonas, setZonas] = useState({ equipos: [], transito: [] });
   const [dia, setDia] = useState(dayjs().format(ISO_DAY));
   const [vista, setVista] = useState('lista');
-  const [filtro, setFiltro] = useState('todas');
+  // Filters: name search, status and who it is assigned to (the date is the plan day)
+  const [busqueda, setBusqueda] = useState('');
+  const [estado, setEstado] = useState('todas');
+  const [asignadoA, setAsignadoA] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
   const [panelState, setPanelState] = useState({ canExtract: false, fetching: false });
+  const [actualizado, setActualizado] = useState(null);
   const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
   const baseRef = useRef(null);
@@ -54,6 +95,7 @@ function App() {
     setNuevas(nuevasSet);
     setSource(sourceLabel);
     setMapeo(mapeoUsado || {});
+    setActualizado(dayjs());
   }, []);
 
   const handleAssign = useCallback(async (base, overrides = {}) => {
@@ -62,15 +104,27 @@ function App() {
     setLoading(true);
     try {
       message.loading({ content: 'Calculando el plan del día...', key: 'assign', duration: 0 });
-      const assignment = await assignActivities(request);
+      let assignment = await assignActivities(request);
+      // The backend could not reach the road server: the browser asks for the road times and the plan is redone
+      if (!assignment.metricas.tiempos_por_vias) {
+        message.loading({ content: 'Consultando tiempos por carretera desde el navegador...', key: 'assign', duration: 0 });
+        const puntos = [
+          ...catalog.sedes.map((s) => [s.coordinates.latitude, s.coordinates.longitude]),
+          ...request.actividades
+            .filter((a) => a.coordinates && (a.situacion !== 'asignada' || a.fecha_visita === request.dia))
+            .map((a) => [a.coordinates.latitude, a.coordinates.longitude]),
+        ];
+        const matriz = await matrizPorVias(puntos);
+        if (matriz) assignment = await assignActivities({ ...request, matriz });
+      }
       setResult(assignment);
       setIncluirRetorno(request.jornada.incluir_retorno);
       setAssignedCodes(codesKey(request.actividades));
       const m = assignment.metricas;
       message.success({
-        content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} OTs a técnicos, ${m.ots_con_contratistas} a contratistas`,
+        content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} a técnicos, ${m.ots_con_contratistas} a contratistas`,
         key: 'assign',
-        duration: 4,
+        duration: 3,
       });
     } catch (error) {
       console.error('Assignment error:', error);
@@ -78,7 +132,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [dia, fijas]);
+  }, [dia, fijas, catalog]);
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
@@ -99,6 +153,38 @@ function App() {
     if (baseRef.current) handleAssign(baseRef.current, { fijas: {} });
   };
 
+  // Activity of each OT: from Metabase and, for the plan, as the optimizer returned it
+  const actividades = useMemo(() => {
+    const porCodigo = {};
+    (ots || []).forEach((a) => { porCodigo[a.codigo_bia] = a; });
+    (result?.rutas || []).forEach((r) => r.ruta.paradas.forEach((p) => { porCodigo[p.actividad.codigo_bia] = p.actividad; }));
+    (result?.sin_asignar || []).forEach(({ actividad }) => { porCodigo[actividad.codigo_bia] = actividad; });
+    return porCodigo;
+  }, [ots, result]);
+
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA);
+  const visibles = useMemo(() => {
+    if (!result || !filtrosActivos) return null;
+    const texto = normalizeText(busqueda.trim());
+    return new Set(result.decisiones.filter((d) => (
+      (estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+      && matchesAssignee(d, asignadoA)
+      && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto))
+    )).map((d) => d.codigo_bia));
+  }, [result, filtrosActivos, busqueda, estado, asignadoA, actividades]);
+
+  // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
+  const otsFiltradas = useMemo(() => {
+    const texto = normalizeText(busqueda.trim());
+    const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    return (ots || []).filter((a) => (
+      (a.situacion !== 'asignada' || a.fecha_visita === dia)
+      && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
+      && (!asignadoA || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
+      && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
+    ));
+  }, [ots, result, dia, busqueda, estado, asignadoA]);
+
   const busy = loading || panelState.fetching;
   const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
   const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
@@ -114,26 +200,24 @@ function App() {
     <Layout className="app-shell">
       <Header className="ios-header">
         <div className="ios-header-inner">
-          <Space size={12}>
+          <Space size={10}>
             <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" className="app-icon" />
-            <div>
-              <div className="app-title">Ruteo</div>
-              <div className="app-subtitle">
-                {source && ots ? `${source} · ${ots.length} OTs` : 'Técnicos Bia o contratistas, OT por OT'}
-              </div>
-            </div>
+            <span className="app-title">Ruteo</span>
+            {ots && (
+              <span className="app-subtitle">
+                {ots.length} OTs{actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
+                {source.startsWith('Archivo') ? ` · ${source}` : ''}
+              </span>
+            )}
           </Space>
-          <Space size={8}>
+          <Space size={6}>
             {ots?.length > 0 && (
               <Tooltip title="Recalcular con los ajustes actuales">
-                <Button shape="circle" size="large" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
+                <Button type="text" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
               </Tooltip>
             )}
             <Button
               type="primary"
-              shape="round"
-              size="large"
-              icon={<ThunderboltFilled />}
               loading={busy}
               disabled={!panelState.canExtract}
               onClick={() => panelRef.current?.extract()}
@@ -146,13 +230,13 @@ function App() {
 
       <Layout>
         <Sider
-          width={380}
+          width={340}
           className="ios-sider"
           style={{
             overflow: 'auto',
-            height: 'calc(100vh - 64px)',
+            height: 'calc(100vh - 56px)',
             position: 'sticky',
-            top: 64,
+            top: 56,
             left: 0,
           }}
           collapsible
@@ -162,7 +246,7 @@ function App() {
           breakpoint="lg"
         >
           {/* Bottom padding so the sider collapse trigger does not cover the last section */}
-          <div style={{ padding: 16, paddingBottom: 72 }}>
+          <div style={{ padding: '8px 0 72px' }}>
             <AssignmentPanel
               ref={panelRef}
               ots={ots}
@@ -181,14 +265,35 @@ function App() {
 
         <Layout className="main-pane">
           <Content>
-            <div className="day-header">
+            <div className="title-row">
               <div>
-                <div className="eyebrow">{dia === hoy ? 'Plan de hoy' : 'Plan del día'}</div>
+                <div className="eyebrow">{dia === hoy ? 'Hoy' : 'Plan del día'}</div>
                 <div className="large-title">{capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
               </div>
-              <Space size={6} className="day-nav">
+              <Segmented
+                value={vista}
+                onChange={setVista}
+                options={[
+                  { value: 'lista', label: 'Lista' },
+                  { value: 'mapa', label: 'Mapa' },
+                  { value: 'rutas', label: 'Rutas' },
+                  { value: 'tabla', label: 'Tabla completa' },
+                ]}
+              />
+            </div>
+
+            <div className="filter-bar">
+              <Input
+                allowClear
+                variant="filled"
+                prefix={<SearchOutlined />}
+                placeholder="Buscar por nombre, OT o dirección"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                className="filter-search"
+              />
+              <Space.Compact className="filter-date">
                 <Button
-                  shape="circle"
                   icon={<LeftOutlined />}
                   disabled={busy}
                   onClick={() => changeDay(dayjs(dia).subtract(1, 'day').format(ISO_DAY))}
@@ -197,77 +302,74 @@ function App() {
                   value={dayjs(dia)}
                   allowClear={false}
                   disabled={busy}
-                  variant="filled"
                   format="DD/MM/YYYY"
                   onChange={(d) => d && changeDay(d.format(ISO_DAY))}
-                  style={{ width: 132 }}
+                  style={{ width: 128 }}
                 />
                 <Button
-                  shape="circle"
                   icon={<RightOutlined />}
                   disabled={busy}
                   onClick={() => changeDay(dayjs(dia).add(1, 'day').format(ISO_DAY))}
                 />
-                {dia !== hoy && (
-                  <Button shape="round" disabled={busy} onClick={() => changeDay(hoy)}>Hoy</Button>
-                )}
-              </Space>
-            </div>
-
-            <div className="toolbar">
+              </Space.Compact>
+              {dia !== hoy && (
+                <Button type="link" disabled={busy} onClick={() => changeDay(hoy)} style={{ paddingInline: 4 }}>Hoy</Button>
+              )}
               <Segmented
-                value={vista}
-                onChange={setVista}
+                value={estado}
+                onChange={setEstado}
                 options={[
-                  { value: 'lista', label: 'Lista', icon: <UnorderedListOutlined /> },
-                  { value: 'mapa', label: 'Mapa', icon: <EnvironmentOutlined /> },
-                  { value: 'rutas', label: 'Rutas', icon: <NodeIndexOutlined /> },
-                  { value: 'ots', label: 'Metabase', icon: <TableOutlined /> },
+                  { value: 'todas', label: `Todas${result ? ` ${decisiones.length}` : ''}` },
+                  { value: 'pendientes', label: `Por asignar${result ? ` ${cuenta('pendiente')}` : ''}` },
+                  { value: 'asignadas', label: `Asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
                 ]}
               />
-              {vista !== 'ots' && (
-                <Segmented
-                  value={filtro}
-                  onChange={setFiltro}
-                  options={[
-                    { value: 'todas', label: `Todas${result ? ` ${decisiones.length}` : ''}` },
-                    { value: 'asignadas', label: `Ya asignadas${result ? ` ${cuenta('asignada')}` : ''}` },
-                    { value: 'pendientes', label: `Por asignar${result ? ` ${cuenta('pendiente')}` : ''}` },
-                  ]}
-                />
+              <Select
+                allowClear
+                showSearch
+                variant="filled"
+                placeholder="Asignado a"
+                value={asignadoA}
+                onChange={setAsignadoA}
+                options={assigneeOptions(result)}
+                optionFilterProp="label"
+                popupMatchSelectWidth={false}
+                className="filter-assignee"
+              />
+              {filtrosActivos && (
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA(null); }} style={{ paddingInline: 4 }}>
+                  Limpiar
+                </Button>
               )}
               {ediciones > 0 && (
-                <Space size={4}>
-                  <Tag color="gold" bordered={false}>{ediciones} editada{ediciones > 1 ? 's' : ''}</Tag>
-                  <Button size="small" shape="round" icon={<UndoOutlined />} disabled={busy} onClick={clearEdits}>
-                    Quitar ediciones
-                  </Button>
-                </Space>
+                <Button type="text" icon={<UndoOutlined />} disabled={busy} onClick={clearEdits}>
+                  Quitar {ediciones} {ediciones > 1 ? 'ediciones' : 'edición'}
+                </Button>
               )}
             </div>
 
-            <Spin spinning={loading} size="large" tip="Calculando el plan del día...">
+            <Spin spinning={loading} tip="Calculando el plan del día...">
               {stale && (
                 <Alert
                   type="info"
                   showIcon
                   className="ios-alert"
-                  message="Las OTs cambiaron desde la última recomendación. Pulsa recalcular (↻) para actualizarla."
+                  message="Las OTs cambiaron desde el último cálculo. Pulsa recalcular (↻) arriba a la derecha."
                 />
               )}
-              {vista === 'ots' && (
+              {vista === 'tabla' && (
                 ots?.length ? (
-                  <OtsTable ots={ots} nuevas={nuevas} mapeo={mapeo} config={config} title={`Todas las OTs de la pregunta (${ots.length})`} />
+                  <OtsTable ots={otsFiltradas} nuevas={nuevas} mapeo={mapeo} config={config} title={`OTs del día (${otsFiltradas.length})`} />
                 ) : <EmptyState />
               )}
-              {vista !== 'ots' && (result ? (
+              {vista !== 'tabla' && (result ? (
                 <AssignmentResults
                   result={result}
                   ots={ots}
                   nuevas={nuevas}
                   incluirRetorno={incluirRetorno}
                   view={vista}
-                  filtro={filtro}
+                  visibles={visibles}
                   fijas={fijas}
                   onEdit={handleEdit}
                   tecnicos={tecnicosEdicion}
@@ -285,11 +387,9 @@ function App() {
 
 const EmptyState = () => (
   <div className="empty-state">
-    <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" />
     <div className="empty-title">Sin plan todavía</div>
     <div className="empty-text">
-      Pulsa «Extraer y recomendar» para traer las OTs de Metabase: las ya asignadas para este día se respetan y
-      la app sugiere a quién enviar las pendientes.
+      Pulsa «Extraer y recomendar»: las OTs ya asignadas para este día se respetan y la app sugiere a quién enviar las pendientes.
     </div>
   </div>
 );

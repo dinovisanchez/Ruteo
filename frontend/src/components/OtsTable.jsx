@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
-import { Card, Table, Tag, Tooltip, Typography } from 'antd';
-import { EnvironmentOutlined, WarningOutlined } from '@ant-design/icons';
+import { Card, Table, Tooltip, Typography } from 'antd';
 import dayjs from 'dayjs';
 import { otTypeSettings } from '../services/otTypes';
 
@@ -44,7 +43,7 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       render: (codigo) => (
         <span>
           <Text strong>{codigo}</Text>
-          {nuevas?.has(codigo) && <Tag color="green" style={{ marginLeft: 6 }}>Nueva</Tag>}
+          {nuevas?.has(codigo) && <span className="new-badge">nueva</span>}
         </span>
       ),
     },
@@ -53,8 +52,12 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       width: 120,
       filters: [{ text: 'Ya asignada', value: 'asignada' }, { text: 'Por asignar', value: 'pendiente' }],
       onFilter: (value, a) => a.situacion === value,
-      render: (_, a) => (a.situacion === 'asignada'
-        ? <Tag color="green">Ya asignada</Tag> : <Tag color="orange">Por asignar</Tag>),
+      render: (_, a) => (
+        <span className="state">
+          <span className="dot" style={{ background: a.situacion === 'asignada' ? '#34C759' : '#FF9500' }} />
+          {a.situacion === 'asignada' ? 'Asignada' : 'Por asignar'}
+        </span>
+      ),
     },
     {
       title: 'Fecha visita',
@@ -89,8 +92,7 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       title: 'Personas',
       width: 90,
       render: (_, a) => {
-        const personas = otTypeSettings(a.servicio, config?.tipos_ot).personas;
-        return <Tag color={personas > 1 ? 'blue' : undefined}>{personas}</Tag>;
+        return otTypeSettings(a.servicio, config?.tipos_ot).personas;
       },
     },
     { title: 'Cliente', dataIndex: 'nombre', width: 200, ellipsis: true },
@@ -100,15 +102,15 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       title: 'Ubicación',
       width: 120,
       render: (_, a) => {
-        if (!a.coordinates) return <Tag icon={<WarningOutlined />} color="error">Sin ubicación</Tag>;
+        if (!a.coordinates) return <span className="warn-text">Sin ubicación</span>;
         if (a.coordenadas_aproximadas) {
           return (
             <Tooltip title="Geocodificada a partir de la dirección o el municipio">
-              <Tag icon={<EnvironmentOutlined />} color="warning">Aproximada</Tag>
+              <span>Aproximada</span>
             </Tooltip>
           );
         }
-        return <Tag icon={<EnvironmentOutlined />} color="success">GPS</Tag>;
+        return 'GPS';
       },
     },
     ...extraKeys.map((key) => ({
