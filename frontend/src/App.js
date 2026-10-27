@@ -26,6 +26,8 @@ const { Header, Content, Sider } = Layout;
 
 // Whether the panel is shown: remembered in this browser; the first time, open on wide screens
 const PANEL_KEY = 'ruteo_panel_abierto';
+// The OR filter chosen, remembered in this browser
+const OR_KEY = 'ruteo_filtro_or';
 const leerPanel = () => {
   try {
     const guardado = localStorage.getItem(PANEL_KEY);
@@ -166,7 +168,20 @@ function App() {
   const [estado, setEstado] = useState('todas');
   const [asignadoA, setAsignadoA] = useState([]);
   // Network operators (OR) to show; empty = all. It only filters what is shown, not the plan
-  const [ors, setOrs] = useState([]);
+  const [ors, setOrs] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(OR_KEY) || '[]');
+    } catch (error) {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(OR_KEY, JSON.stringify(ors));
+    } catch (error) {
+      // Without storage it is not remembered
+    }
+  }, [ors]);
   // Full table: the OTs of the day's plan, or every OT loaded from Metabase
   const [alcanceTabla, setAlcanceTabla] = useState('dia');
   // Weekly hours of a technician and working days, for utilization (UTR)
@@ -459,6 +474,9 @@ function App() {
       pendiente: cuantas(sinEstado, 'situacion', 'pendiente'),
       tecnico: cuantas(sinDestino, 'enviar_a', 'tecnico'),
       contratista: cuantas(sinDestino, 'enviar_a', 'contratista'),
+      // Suggestions: Ruteo proposes a destination but the OT is still pending in Metabase
+      tecnico_sugeridas: sinDestino.filter((d) => d.enviar_a === 'tecnico' && d.situacion === 'pendiente').length,
+      contratista_sugeridas: sinDestino.filter((d) => d.enviar_a === 'contratista' && d.situacion === 'pendiente').length,
       externo: cuantas(sinDestino, 'enviar_a', 'externo'),
       sin_asignar: cuantas(sinDestino, 'enviar_a', 'sin_asignar'),
     };

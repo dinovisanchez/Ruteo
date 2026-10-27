@@ -395,15 +395,18 @@ SELECT
   address AS "Dirección",
   city_name AS "Ciudad",
   department AS "Departamento",
-  created_by AS "Creado por",
+  wo_generate_by AS "Creado por",
   created_at AS "Fecha de creación"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
+  -- Ni canceladas ni de cierre vencido (Olibia las cuenta aparte)
+  AND COALESCE(estado, '') NOT ILIKE '%cancel%'
+  AND COALESCE(estado, '') NOT ILIKE '%vencid%'
   AND (
-    -- Pendientes por asignar (sin las de cierre vencido)
-    (status = 'PENDING' AND status_app = 'PENDING_ASSIGNMENT' AND estado IN ('Por asignar', 'Cambio de Contratista'))
-    -- Asignadas y activas, de la última semana en adelante
-    OR (status = 'PENDING' AND estado IN ('Asignada', 'Reasignado') AND fecha_visita >= CURRENT_DATE - INTERVAL '7 days')
+    -- Por asignar: todo lo que Olibia tiene esperando contratista, sin depender del texto de "estado"
+    status_app = 'PENDING_ASSIGNMENT'
+    -- Asignadas y activas (Asignada, Reasignado, Lista para ejecutar...), de la última semana en adelante
+    OR (status = 'PENDING' AND fecha_visita >= CURRENT_DATE - INTERVAL '7 days')
     -- Visitas hechas por técnicos de Bia desde el mes pasado: para la utilización (UTR)
     OR (estado IN ('Cierre Exitoso', 'Cierre Fallido', 'Completada')
         AND fecha_visita >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'
@@ -413,7 +416,19 @@ WHERE deleted_at IS NULL
 ORDER BY fecha_visita NULLS LAST, card_id;
 ```
 
-**Quién creó la OT.** `Creado por` y `Fecha de creación` salen en la lista (debajo de cada OT), en la tabla completa, en el CSV y en la búsqueda. `created_by` y `created_at` son los nombres más comunes: confirma en Metabase cómo se llaman en `operations.visitas_general` (al editar la pregunta, en la lista de columnas de la tabla). Si `created_by` trae un id y no un nombre, cruza con la tabla de usuarios para traer el nombre, por ejemplo `LEFT JOIN <tabla de usuarios> u ON u.id = v.created_by` y `u.name AS "Creado por"`. La app reconoce también `Creada por`, `Creador` y `Created by`.
+**Quién creó la OT.** `Creado por` y `Fecha de creación` salen en la lista (debajo de cada OT), en la tabla completa, en el CSV y en la búsqueda. En `operations.visitas_general` el creador es `wo_generate_by` (no hay `created_by`) y la fecha, `created_at`. La app reconoce también `Creada por`, `Creador` y `Created by`.
+
+**Si Ruteo no cuadra con Olibia.** Ruteo solo ve lo que trae la pregunta. Para comparar un día (por ejemplo el 29 de octubre) corre en Metabase, sin guardarla, esta consulta y compárala con Olibia filtrado en ese día y los mismos OR:
+
+```sql
+SELECT internal_bia_code, card_id, status, status_app, estado, contratista, electricistas, fecha_visita, operador_de_red
+FROM operations.visitas_general
+WHERE deleted_at IS NULL
+  AND fecha_visita >= DATE '2026-10-29' AND fecha_visita < DATE '2026-10-30'
+ORDER BY operador_de_red, fecha_visita;
+```
+
+Las OTs que salen ahí y no en Ruteo tienen un `status`, `status_app` o `estado` que la pregunta deja por fuera; con esos valores se ajusta el `WHERE`. En Ruteo, la *Tabla completa → Con visita el día* muestra todas las OTs de esa fecha que trajo la pregunta, en cualquier estado.
 
 Las visitas cerradas solo sirven para la utilización: no entran al plan salvo las del mismo día (que ya ocuparon tiempo de su técnico). La última condición toma las de técnicos de Bia; si en Metabase el contratista de Bia se llama distinto, ajusta `contratista ILIKE '%bia%'`.
 

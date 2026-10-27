@@ -28,8 +28,16 @@ const situacion = (valor) => (valor === 'asignada'
 const fechaEnPlan = (actividad, dia) => {
   const fecha = actividad?.fecha_visita;
   if (!fecha) return 'Sin fecha de visita';
-  if (fecha < dia) return `Vencida: era el ${dayjs(fecha).format('D MMM')}`;
-  return `Visita el ${dayjs(fecha).format('D MMM')}`;
+  const hora = actividad.hora_visita ? `, ${actividad.hora_visita}` : '';
+  if (fecha < dia) return `Vencida: era el ${dayjs(fecha).format('D MMM')}${hora}`;
+  return `Visita el ${dayjs(fecha).format('D MMM')}${hora}`;
+};
+
+// Where the destination comes from: still pending (a suggestion), assigned in Metabase, or edited
+const origenDecision = (d, editada) => {
+  if (d.enviar_a === 'sin_asignar') return 'Sin asignar';
+  if (editada) return d.situacion === 'asignada' ? 'Reasignada a mano' : 'Elegido a mano, sigue por asignar';
+  return d.situacion === 'asignada' ? 'Asignada en Metabase' : 'Sugerido por Ruteo';
 };
 
 const otCell = (actividad, codigo, nuevas) => (
@@ -191,7 +199,9 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
           </Tooltip>
         )}
       </div>
-      <div className="assignee-sub">{DESTINO[d.enviar_a]}{editada ? ' · editada a mano' : ''}</div>
+      <div className="assignee-sub">
+        {origenDecision(d, editada)}{d.enviar_a !== 'sin_asignar' ? ` · ${DESTINO[d.enviar_a]}` : ''}
+      </div>
       {abierto && (
         <Select
           size="small"
@@ -299,8 +309,24 @@ const AssignmentResults = ({
         `· sin fecha: ${porAsignar.sinFecha}`,
       ].join('\n'),
     } : null,
-    { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
-    { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
+    {
+      title: 'Técnicos Bia',
+      value: c.tecnico,
+      color: '#007AFF',
+      active: destino === 'tecnico',
+      onClick: porDestino('tecnico'),
+      sub: c.tecnico_sugeridas ? `${c.tecnico_sugeridas} ${c.tecnico_sugeridas === 1 ? 'sugerida' : 'sugeridas'}` : null,
+      hint: 'Asignadas en Metabase a técnicos Bia más las sugeridas por Ruteo (siguen por asignar)',
+    },
+    {
+      title: 'Contratistas',
+      value: c.contratista,
+      color: '#AF52DE',
+      active: destino === 'contratista',
+      onClick: porDestino('contratista'),
+      sub: c.contratista_sugeridas ? `${c.contratista_sugeridas} ${c.contratista_sugeridas === 1 ? 'sugerida' : 'sugeridas'}` : null,
+      hint: 'Asignadas en Metabase a contratistas más las sugeridas por Ruteo (siguen por asignar)',
+    },
     metricas.ots_externas
       ? { title: 'Externas', value: c.externo, active: destino === 'externo', onClick: porDestino('externo') }
       : null,
@@ -340,7 +366,7 @@ const AssignmentResults = ({
       render: (_, p) => (p.decision ? (
         <div className="assignee">
           <div className="assignee-name">{p.decision.responsable || DESTINO[p.decision.enviar_a]}</div>
-          <div className="assignee-sub">{DESTINO[p.decision.enviar_a]}</div>
+          <div className="assignee-sub">{origenDecision(p.decision)} · {DESTINO[p.decision.enviar_a]}</div>
         </div>
       ) : <span className="muted-text">No entra en este día</span>),
     },
