@@ -47,7 +47,12 @@ const LoteModal = ({
     return (
       <li key={codigo}>
         <span className="ot-code">{codigo}</span>
-        <span className="lote-ot-sub">{[a?.servicio, a?.direccion, a?.ciudad].filter(Boolean).join(' · ')}</span>
+        <span className="lote-ot-sub">{[a?.servicio, a?.or_operador, a?.direccion, a?.ciudad].filter(Boolean).join(' · ')}</span>
+        {a?.situacion === 'asignada' && (
+          <span className="lote-ot-asignada">
+            Ya asignada{a.asignado_a ? ` a ${a.asignado_a}` : ''}: se reasigna
+          </span>
+        )}
       </li>
     );
   };

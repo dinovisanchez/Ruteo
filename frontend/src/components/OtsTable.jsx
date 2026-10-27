@@ -20,7 +20,9 @@ const columnFilters = (ots, getter) => [...new Set(ots.map(getter))]
   .sort()
   .map((v) => ({ text: v, value: v }));
 
-const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
+const OtsTable = ({
+  ots, nuevas, mapeo, config, title, enPlan = null, enPlanTitulo = 'En el plan',
+}) => {
   // Extra columns: everything Metabase sent that is not already shown as a main column
   const extraKeys = useMemo(() => {
     const mapped = new Set(Object.values(mapeo || {}));
@@ -59,6 +61,20 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
         </span>
       ),
     },
+    // With every loaded OT: whether it is in the plan of the day and, if not, why
+    ...(enPlan ? [{
+      title: enPlanTitulo,
+      width: 300,
+      filters: [{ text: 'En el plan', value: 'si' }, { text: 'Fuera del plan', value: 'no' }],
+      onFilter: (value, a) => (value === 'si') === Boolean(enPlan[a.codigo_bia]?.dentro),
+      sorter: (a, b) => Number(Boolean(enPlan[b.codigo_bia]?.dentro)) - Number(Boolean(enPlan[a.codigo_bia]?.dentro)),
+      render: (_, a) => (
+        <span className="state">
+          <span className="dot" style={{ background: enPlan[a.codigo_bia]?.dentro ? '#007AFF' : '#C7C7CC' }} />
+          {enPlan[a.codigo_bia]?.texto}
+        </span>
+      ),
+    }] : []),
     {
       title: 'Fecha visita',
       dataIndex: 'fecha_visita',

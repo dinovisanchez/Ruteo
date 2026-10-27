@@ -15,7 +15,7 @@ import LoteModal from './components/LoteModal';
 import OtsTable from './components/OtsTable';
 import UtilizationDashboard from './components/UtilizationDashboard';
 import {
-  assignActivities, getCatalog, getUtilization, getZones, proposeBatch,
+  assignActivities, getCatalog, getOperators, getUtilization, getZones, proposeBatch,
 } from './services/api';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
@@ -43,6 +43,26 @@ const SECCIONES_PANEL = [
   { key: 'tipos', label: 'Tipos de OT', icon: <AppstoreOutlined /> },
   { key: 'ajustes', label: 'Ajustes', icon: <SettingOutlined /> },
 ];
+
+// Why a loaded OT is or is not in the plan of `dia`, for the full table
+const DESTINO_TEXTO = {
+  tecnico: 'técnico Bia', contratista: 'contratista', externo: 'externo', sin_asignar: 'sin asignar',
+};
+const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
+  const fecha = a.fecha_visita ? dayjs(a.fecha_visita).format('D MMM') : null;
+  if (decision) return { dentro: true, texto: `Sí · a ${DESTINO_TEXTO[decision.enviar_a]}` };
+  if (calculadas && !calculadas.has(a.codigo_bia)) return { dentro: false, texto: 'Llegó después del último cálculo: recalcula (↻)' };
+  if (filtroOr.length && !filtroOr.includes(normalizeText(a.or_operador))) return { dentro: false, texto: 'Su OR no está en el filtro de Ajustes' };
+  if (a.situacion === 'asignada') {
+    if (!a.fecha_visita) return { dentro: false, texto: 'Asignada sin fecha de visita en Metabase' };
+    if (cerrada) return { dentro: false, texto: `Cerrada el ${fecha}: cuenta para la utilización` };
+    return { dentro: false, texto: `Asignada para el ${fecha}` };
+  }
+  if (a.fecha_visita && a.fecha_visita < hoy) return { dentro: false, texto: 'Vencida: entra en el plan de hoy' };
+  if (a.fecha_visita && a.fecha_visita !== dia) return { dentro: false, texto: `Pendiente para el ${fecha}` };
+  if (!a.fecha_visita && dia < hoy) return { dentro: false, texto: 'Sin fecha: entra hoy o un día futuro' };
+  return { dentro: false, texto: 'No entró en el plan' };
+};
 
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
 
@@ -142,6 +162,10 @@ function App() {
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('todas');
   const [asignadoA, setAsignadoA] = useState([]);
+  // Network operators (OR) to show; empty = all. It only filters what is shown, not the plan
+  const [ors, setOrs] = useState([]);
+  // Full table: the OTs of the day's plan, or every OT loaded from Metabase
+  const [alcanceTabla, setAlcanceTabla] = useState('dia');
   // Weekly hours of a technician and working days, for utilization (UTR)
   const [capacidad, setCapacidad] = useState({ horasSemana: 42, diasSemana: 5 });
   // UTR of each technician in the week before the plan day (technician id → 0..1), to show when editing
@@ -310,8 +334,12 @@ function App() {
   };
 
   // The selected OTs all to one destination, or a proposal by proximity
-  const aplicarLote = async (valor) => {
+  const aplicarLote = async (valor, soloPendientes = false) => {
     if (!baseRef.current || !seleccion.length) return;
+    const situacionDe = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion]));
+    // "Solo por asignar" leaves the assigned ones of the selection as they are
+    const codigos = soloPendientes ? seleccion.filter((c) => situacionDe[c] === 'pendiente') : seleccion;
+    if (!codigos.length) return;
     if (valor === POR_CERCANIA) {
       setLoteOcupado(true);
       try {
@@ -319,7 +347,7 @@ function App() {
         const planActual = Object.fromEntries((result?.decisiones || [])
           .filter((d) => d.enviar_a === 'tecnico' && d.responsable_id)
           .map((d) => [d.codigo_bia, d.responsable_id]));
-        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos: seleccion, plan_actual: planActual }));
+        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos, plan_actual: planActual }));
       } catch (error) {
         message.error(`No se pudo armar la propuesta: ${error.message}`);
       } finally {
@@ -327,11 +355,10 @@ function App() {
       }
       return;
     }
-    const situaciones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion]));
     const next = { ...fijas };
-    seleccion.forEach((codigo) => {
+    codigos.forEach((codigo) => {
       // "Que decida la app" on a pending OT is the same as no edit
-      if (valor === 'auto' && situaciones[codigo] !== 'asignada') delete next[codigo];
+      if (valor === 'auto' && situacionDe[codigo] !== 'asignada') delete next[codigo];
       else next[codigo] = valor;
     });
     const [tipo, id] = valor.split(':');
@@ -366,15 +393,40 @@ function App() {
     return porCodigo;
   }, [ots, result]);
 
-  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino);
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino || ors.length);
+  // Metabase writes the same OR in several ways ("AFINIA - CARIBEMAR DE LA COSTA", "Afinia"):
+  // the filter uses the name of the OR catalog
+  const [nombresOr, setNombresOr] = useState({});
+  const nombresOrKey = useMemo(() => [...new Set((ots || []).map((a) => a.or_operador))].sort().join('|'), [ots]);
+  useEffect(() => {
+    if (!nombresOrKey) return;
+    getOperators(nombresOrKey.split('|')).then((r) => setNombresOr(r.resueltos || {})).catch(() => setNombresOr({}));
+  }, [nombresOrKey]);
+  const orDe = useCallback((a) => nombresOr[a?.or_operador] || a?.or_operador, [nombresOr]);
+  const pasaOr = useCallback((a) => !ors.length || ors.includes(orDe(a)), [ors, orDe]);
+  // The ORs of the loaded OTs, with how many pending OTs (any date) each one has
+  const opcionesOr = useMemo(() => {
+    const total = {};
+    const pendientes = {};
+    (ots || []).forEach((a) => {
+      const nombre = orDe(a);
+      total[nombre] = (total[nombre] || 0) + 1;
+      if (a.situacion === 'pendiente') pendientes[nombre] = (pendientes[nombre] || 0) + 1;
+    });
+    return Object.keys(total).sort().map((nombre) => ({
+      value: nombre,
+      label: `${nombre} · ${pendientes[nombre] || 0} por asignar`,
+    }));
+  }, [ots, orDe]);
   // Whether a decision passes the filters; the counts can leave out the status or destination filter
   const pasaFiltros = useCallback((d, { porEstado = true, porDestino = true } = {}) => {
     const texto = normalizeText(busqueda.trim());
     return (!porEstado || estado === 'todas' || (estado === 'asignadas' ? d.situacion === 'asignada' : d.situacion === 'pendiente'))
       && (!porDestino || !destino || d.enviar_a === destino)
       && matchesAssignee(d, asignadoA)
+      && pasaOr(actividades[d.codigo_bia])
       && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto));
-  }, [busqueda, estado, destino, asignadoA, actividades]);
+  }, [busqueda, estado, destino, asignadoA, actividades, pasaOr]);
 
   const visibles = useMemo(() => {
     if (!result || !filtrosActivos) return null;
@@ -409,10 +461,11 @@ function App() {
       .filter((a) => a.situacion === 'pendiente')
       .map((a) => ({ actividad: a, grupo: grupoPendiente(a.fecha_visita, hoy), decision: decisiones[a.codigo_bia] }))
       .filter(({ actividad: a, decision: d }) => (!asignadoA.length || (d && matchesAssignee(d, asignadoA)))
+        && pasaOr(a)
         && (!texto || searchText(a.codigo_bia, a, d?.responsable).includes(texto)))
       .sort((x, y) => (GRUPOS_PENDIENTES[x.grupo] - GRUPOS_PENDIENTES[y.grupo])
         || (x.actividad.fecha_visita || '').localeCompare(y.actividad.fecha_visita || ''));
-  }, [ots, result, hoy, busqueda, asignadoA]);
+  }, [ots, result, hoy, busqueda, asignadoA, pasaOr]);
 
   const porAsignar = useMemo(() => {
     const cuantas = (grupo) => pendientesTodas.filter((p) => p.grupo === grupo).length;
@@ -426,19 +479,37 @@ function App() {
   }, [pendientesTodas]);
 
   // The full table shows the OTs of the day (pending and assigned for that date) with the same filters,
-  // or every pending OT when "Falta por asignar" is selected
+  // every pending OT when "Falta por asignar" is selected, or every loaded OT
   const otsFiltradas = useMemo(() => {
     if (estado === 'backlog') return pendientesTodas.map((p) => p.actividad);
     const texto = normalizeText(busqueda.trim());
     const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
     return (ots || []).filter((a) => (
-      entraEnElDia(a, dia, hoy)
+      (alcanceTabla === 'todas' || entraEnElDia(a, dia, hoy))
+      && pasaOr(a)
       && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
       && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
       && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
-  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA, pendientesTodas]);
+  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA, pendientesTodas, alcanceTabla, pasaOr]);
+
+  // For every loaded OT: whether it is in the plan of the day and, if not, why
+  const motivosPlan = useMemo(() => {
+    if (alcanceTabla !== 'todas' || !ots) return null;
+    const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    const filtroOr = (baseRef.current?.or_filtro || []).map(normalizeText);
+    const calculadas = baseRef.current ? new Set(baseRef.current.actividades.map((a) => a.codigo_bia)) : null;
+    const columnaSituacion = mapeo.situacion;
+    return Object.fromEntries(ots.map((a) => [a.codigo_bia, enElPlan(a, {
+      decision: decisiones[a.codigo_bia],
+      dia,
+      hoy,
+      filtroOr,
+      calculadas,
+      cerrada: Boolean(columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad')),
+    })]));
+  }, [alcanceTabla, ots, result, dia, hoy, mapeo]);
 
   const backlog = estado === 'backlog';
   // The map and the routes are of one day: "Falta por asignar" is a list
@@ -474,7 +545,16 @@ function App() {
             <span className="app-title">Ruteo</span>
             {ots && (
               <span className="app-subtitle">
-                {ots.length} OTs{actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
+                <Tooltip title="Ver todas las OTs cargadas y por qué cada una está o no en el plan">
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => { setVista('tabla'); setAlcanceTabla('todas'); setEstado((e) => (e === 'backlog' ? 'todas' : e)); }}
+                  >
+                    {ots.length} OTs cargadas
+                  </button>
+                </Tooltip>
+                {actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
                 {source.startsWith('Archivo') ? ` · ${source}` : ''}
               </span>
             )}
@@ -646,8 +726,26 @@ function App() {
                 // It grows with the people chosen, so their names show instead of "+ 2 ..."
                 style={{ width: asignadoA.length ? Math.min(460, 140 + asignadoA.length * 150) : 180 }}
               />
+              {vista !== 'utilizacion' && (
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  maxTagCount="responsive"
+                  variant="filled"
+                  placeholder="OR"
+                  value={ors}
+                  onChange={setOrs}
+                  options={opcionesOr}
+                  optionFilterProp="label"
+                  popupMatchSelectWidth={false}
+                  className="filter-or"
+                  aria-label="Filtrar por OR"
+                  style={{ width: ors.length ? Math.min(360, 110 + ors.length * 110) : 110 }}
+                />
+              )}
               {filtrosActivos && (
-                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); }} style={{ paddingInline: 4 }}>
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); setOrs([]); }} style={{ paddingInline: 4 }}>
                   Limpiar
                 </Button>
               )}
@@ -669,13 +767,29 @@ function App() {
               )}
               {vista === 'tabla' && (
                 ots?.length ? (
-                  <OtsTable
-                    ots={otsFiltradas}
-                    nuevas={nuevas}
-                    mapeo={mapeo}
-                    config={config}
-                    title={backlog ? `Falta por asignar, todas las fechas (${otsFiltradas.length})` : `OTs del día (${otsFiltradas.length})`}
-                  />
+                  <>
+                    {!backlog && (
+                      <Segmented
+                        className="tabla-alcance"
+                        value={alcanceTabla}
+                        onChange={setAlcanceTabla}
+                        options={[
+                          { value: 'dia', label: 'Del plan del día' },
+                          { value: 'todas', label: `Todas las cargadas (${ots.length})` },
+                        ]}
+                      />
+                    )}
+                    <OtsTable
+                      ots={otsFiltradas}
+                      nuevas={nuevas}
+                      mapeo={mapeo}
+                      config={config}
+                      enPlan={!backlog ? motivosPlan : null}
+                      enPlanTitulo={`En el plan del ${dayjs(dia).format('D MMM')}`}
+                      title={backlog ? `Falta por asignar, todas las fechas (${otsFiltradas.length})`
+                        : alcanceTabla === 'todas' ? `OTs cargadas (${otsFiltradas.length})` : `OTs del día (${otsFiltradas.length})`}
+                    />
+                  </>
                 ) : <EmptyState />
               )}
               {vista === 'utilizacion' && (
@@ -723,6 +837,7 @@ function App() {
             {vista === 'lista' && !backlog && seleccion.length > 0 && (
               <LoteBar
                 cantidad={seleccion.length}
+                pendientes={seleccion.filter((c) => result?.decisiones.find((d) => d.codigo_bia === c)?.situacion === 'pendiente').length}
                 tecnicos={tecnicosEdicion}
                 empresas={catalog.empresas}
                 onAplicar={aplicarLote}

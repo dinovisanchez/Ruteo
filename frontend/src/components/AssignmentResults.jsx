@@ -450,6 +450,26 @@ const AssignmentResults = ({
         />
       )}
 
+      {view === 'lista' && !pendientesTodas && onSeleccion && (
+        // Quick selection for a batch, among the OTs the filters show (for example, one OR)
+        <div className="list-tools">
+          <span className="list-tools-label">Seleccionar{visibles ? ' de lo filtrado' : ''}:</span>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => onSeleccion(rows.filter((r) => r.decision.situacion === 'pendiente').map((r) => r.key))}
+          >
+            Solo por asignar ({rows.filter((r) => r.decision.situacion === 'pendiente').length})
+          </Button>
+          <Button type="link" size="small" onClick={() => onSeleccion(rows.map((r) => r.key))}>
+            Por asignar y asignadas ({rows.length})
+          </Button>
+          {seleccion.length > 0 && (
+            <Button type="link" size="small" onClick={() => onSeleccion([])}>Ninguna</Button>
+          )}
+        </div>
+      )}
+
       {view === 'lista' && !pendientesTodas && (
         <Table
           className="plain-table"
