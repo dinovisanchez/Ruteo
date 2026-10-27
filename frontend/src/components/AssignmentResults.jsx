@@ -24,6 +24,14 @@ const situacion = (valor) => (valor === 'asignada'
   ? <span className="state"><Dot color="#34C759" />Asignada</span>
   : <span className="state"><Dot color="#FF9500" />Por asignar</span>);
 
+// The visit date of an OT in the plan of `dia`: that day, overdue or undated (these two, only today)
+const fechaEnPlan = (actividad, dia) => {
+  const fecha = actividad?.fecha_visita;
+  if (!fecha) return 'Sin fecha de visita';
+  if (fecha < dia) return `Vencida: era el ${dayjs(fecha).format('D MMM')}`;
+  return `Visita el ${dayjs(fecha).format('D MMM')}`;
+};
+
 const otCell = (actividad, codigo, nuevas) => (
   <div className="ot-cell">
     <span className="ot-code">{codigo}</span>
@@ -36,7 +44,7 @@ const otCell = (actividad, codigo, nuevas) => (
     <div className="ot-cell-sub">{[actividad?.servicio, actividad?.nombre, actividad?.ciudad].filter(Boolean).join(' · ')}</div>
     {actividad?.creado_por && (
       <div className="ot-cell-sub ot-creator">
-        Creada por {actividad.creado_por}{actividad.fecha_creacion ? ` · ${dayjs(actividad.fecha_creacion).format('D MMM')}` : ''}
+        Creada por {actividad.creado_por}{actividad.fecha_creacion ? ` el ${dayjs(actividad.fecha_creacion).format('D MMM')}` : ''}
       </div>
     )}
   </div>
@@ -356,8 +364,13 @@ const AssignmentResults = ({
     },
     {
       title: 'Estado',
-      width: 120,
-      render: (_, r) => situacion(r.decision.situacion),
+      width: 160,
+      render: (_, r) => (
+        <div>
+          {situacion(r.decision.situacion)}
+          <div className="ot-cell-sub">{fechaEnPlan(r.actividad, metricas.dia)}</div>
+        </div>
+      ),
     },
     {
       title: 'Enviar a',

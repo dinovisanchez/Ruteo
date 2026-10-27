@@ -1,5 +1,7 @@
 import React, { useMemo } from 'react';
-import { Card, Table, Tooltip, Typography } from 'antd';
+import {
+  Card, Empty, Table, Tooltip, Typography,
+} from 'antd';
 import dayjs from 'dayjs';
 import { otTypeSettings } from '../services/otTypes';
 
@@ -33,7 +35,13 @@ const OtsTable = ({
     return keys;
   }, [ots, mapeo]);
 
-  if (!ots?.length) return null;
+  if (!ots?.length) {
+    return (
+      <Card title={title} style={{ marginBottom: 16 }}>
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No hay OTs con estos filtros" />
+      </Card>
+    );
+  }
 
   const columns = [
     {

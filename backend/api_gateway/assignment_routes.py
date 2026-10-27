@@ -278,9 +278,9 @@ def plan_del_dia(
 ) -> Tuple[List[Activity], Dict[str, str], Dict[str, str], Dict[str, str], List[List[str]], Dict]:
     """OTs del día y a quién quedan fijadas.
 
-    Entran las asignadas en Metabase para `dia` y las pendientes de ese día: una pendiente con
-    fecha de visita entra ese día (o hoy, si la fecha ya pasó y sigue pendiente); sin fecha,
-    entra hoy o cualquier día futuro. Una asignada queda
+    Entran las OTs con fecha de visita `dia`, asignadas o pendientes, igual que en Olibia. Solo
+    el plan de hoy suma además las pendientes vencidas (su fecha ya pasó) y las pendientes sin
+    fecha, para que no queden sin planear. Una asignada queda
     fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
     si está en el catálogo, o como externa si su responsable no está en la app. Las
     ediciones a mano mandan sobre lo que dice Metabase.
@@ -307,13 +307,11 @@ def plan_del_dia(
                 sin_fecha += 1
             continue
         if actividad.situacion == "pendiente" and fecha != dia:
-            # Sin fecha: hoy o un día futuro (no se puede hacer en el pasado); con fecha: ese día,
-            # o hoy si la fecha ya pasó y sigue pendiente
-            if (not fecha and dia < hoy) or (fecha and not (fecha < hoy and dia == hoy)):
+            # Otro día solo muestra lo que tiene esa fecha; hoy suma las vencidas y las sin fecha
+            if dia != hoy or (fecha and fecha > hoy):
                 pendientes_otros_dias += 1
                 continue
-            if fecha:
-                notas[codigo] = f"Pendiente desde el {fecha}"
+            notas[codigo] = f"Pendiente desde el {fecha}" if fecha else "Pendiente sin fecha de visita"
         del_dia.append(actividad)
 
         edicion = ediciones.get(codigo)
