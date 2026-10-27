@@ -432,6 +432,15 @@ ORDER BY operador_de_red, fecha_visita;
 
 Las OTs que salen ahí y no en Ruteo tienen un `status`, `status_app` o `estado` que la pregunta deja por fuera; con esos valores se ajusta el `WHERE`. En Ruteo, la *Tabla completa → Con visita el día* muestra todas las OTs de esa fecha que trajo la pregunta, en cualquier estado.
 
+**Una OT con varias visitas.** `visitas_general` trae una fila por visita, y una OT (mismo `internal_bia_code` y `card_id`) puede tener varias: la que se reprogramó, la que falló y la nueva. Ruteo toma como vigente la visita que sigue **por asignar** o, si ninguna, la más reciente, y le deja el código tal cual (`CO0100006578`). Las visitas anteriores ya asignadas o cerradas entran aparte con su fecha (`CO0100006578 · 2026-10-15`), porque ocuparon a su técnico ese día; las anteriores que dicen «por asignar» no cuentan aparte, porque vale la más reciente. Dos filas de la misma OT con la misma fecha y hora son la misma visita y cuentan una vez. Si Metabase trae más filas que OTs cargadas, el panel lo dice («Metabase trajo 285 filas y quedaron … OTs») y explica la diferencia. Para ver todas las visitas de una OT:
+
+```sql
+SELECT internal_bia_code, card_id, fecha_visita, status, status_app, estado, contratista, electricistas
+FROM operations.visitas_general
+WHERE deleted_at IS NULL AND internal_bia_code IN ('CO0100006578', 'CO0100002144')
+ORDER BY internal_bia_code, card_id, fecha_visita;
+```
+
 Las visitas cerradas solo sirven para la utilización: no entran al plan salvo las del mismo día (que ya ocuparon tiempo de su técnico). La última condición toma las de técnicos de Bia; si en Metabase el contratista de Bia se llama distinto, ajusta `contratista ILIKE '%bia%'`.
 
 **2. Catálogo de bases y contratistas** — `backend/data/contratistas.csv` es la hoja *Data Contratista* (sin datos de contacto). Para leerla directamente de Google Sheets, publícala como CSV y pon la URL en `CONTRATISTAS_CSV_URL`.

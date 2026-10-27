@@ -3,6 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+import itertools
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -282,23 +283,13 @@ def filas_a_actividades(
         avisos.append(
             "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
         )
+    codigos, avisos_filas = _codigos_por_fila(filas, mapeo)
+    avisos.extend(avisos_filas)
     actividades: List[Activity] = []
-    vistos = set()
-    duplicadas = 0
     for numero, fila in enumerate(filas, start=1):
-        codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
+        codigo = codigos.get(numero)
         if not codigo:
-            avisos.append(f"Fila {numero}: sin código de OT; se omite")
             continue
-        orden = _texto(fila.get(mapeo["orden_trabajo"])) if "orden_trabajo" in mapeo else ""
-        if codigo in vistos:
-            # Otra OT del mismo CO: se distingue con el número de la orden
-            if not orden or f"{codigo} / OT {orden}" in vistos:
-                duplicadas += 1
-                continue
-            codigo = f"{codigo} / OT {orden}"
-        vistos.add(codigo)
-
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
@@ -322,6 +313,95 @@ def filas_a_actividades(
             creado_por=(_texto(fila.get(mapeo["creado_por"])) or None) if "creado_por" in mapeo else None,
             fecha_creacion=_fecha(fila.get(mapeo["fecha_creacion"])) if "fecha_creacion" in mapeo else None,
         ))
-    if duplicadas:
-        avisos.append(f"{duplicadas} filas repetidas (mismo código de OT) se tomaron una sola vez")
+    if len(actividades) != len(filas):
+        avisos.insert(0, f"Metabase trajo {len(filas)} filas y quedaron {len(actividades)} OTs")
     return actividades, mapeo, avisos
+
+
+def _ejemplos(codigos: List[str]) -> str:
+    distintos = list(dict.fromkeys(codigos))
+    return ", ".join(distintos[:3]) + ("…" if len(distintos) > 3 else "")
+
+
+def _codigos_por_fila(filas: List[Dict[str, Any]], mapeo: Dict[str, str]) -> Tuple[Dict[int, str], List[str]]:
+    """Número de fila → código con el que entra al plan; las filas que no entran no aparecen.
+
+    Cada fila es una visita y una OT (mismo código y misma orden) puede traer varias: la vigente es
+    la que sigue por asignar o, si ninguna, la más reciente, y usa el código tal cual. Las visitas
+    anteriores ya asignadas o cerradas entran aparte con su fecha (ocuparon a su técnico ese día);
+    las anteriores que dicen «por asignar» quedaron atrás con la nueva visita y no cuentan. Dos OTs
+    distintas con el mismo código se distinguen con el número de la orden.
+    """
+    avisos: List[str] = []
+    ots: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for numero, fila in enumerate(filas, start=1):
+        codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
+        if not codigo:
+            avisos.append(f"Fila {numero}: sin código de OT; se omite")
+            continue
+        orden = _texto(fila.get(mapeo["orden_trabajo"])) if "orden_trabajo" in mapeo else ""
+        valor = fila.get(mapeo["fecha_visita"]) if "fecha_visita" in mapeo else None
+        ots.setdefault((codigo, orden), []).append({
+            "numero": numero,
+            "fecha": _fecha(valor) or "",
+            "hora": _hora(valor) or "",
+            "pendiente": _situacion(fila, mapeo) == "pendiente",
+        })
+
+    repetidas = 0
+    viejas: List[str] = []
+    vigentes: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    anteriores: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for clave, visitas in ots.items():
+        unicas: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for visita in visitas:
+            momento = (visita["fecha"], visita["hora"])
+            if momento in unicas:
+                repetidas += 1
+                # Entre copias de la misma visita vale la que dice «por asignar»
+                if not visita["pendiente"]:
+                    continue
+            unicas[momento] = visita
+        # Primero la que sigue por asignar, luego la más reciente; las sin fecha al final
+        ordenadas = sorted(unicas.values(), key=lambda v: (v["pendiente"], v["fecha"], v["hora"]), reverse=True)
+        vigentes[clave] = ordenadas[0]
+        anteriores[clave] = []
+        for visita in ordenadas[1:]:
+            if visita["pendiente"]:
+                viejas.append(clave[0])
+            else:
+                anteriores[clave].append(visita)
+
+    codigos: Dict[int, str] = {}
+    usados = set()
+
+    def usar(numero: int, candidatos: List[str]) -> str:
+        extras = (f"{candidatos[-1]} #{n}" for n in itertools.count(2))
+        codigo = next(c for c in itertools.chain(candidatos, extras) if c not in usados)
+        usados.add(codigo)
+        codigos[numero] = codigo
+        return codigo
+
+    # Si dos OTs comparten código, lo lleva tal cual la que sigue por asignar o la más reciente
+    con_fecha: List[str] = []
+    for clave in sorted(vigentes, key=lambda c: (vigentes[c]["pendiente"], vigentes[c]["fecha"], vigentes[c]["hora"]),
+                        reverse=True):
+        codigo, orden = clave
+        propio = usar(vigentes[clave]["numero"], [codigo, f"{codigo} / OT {orden}"] if orden else [codigo])
+        for visita in anteriores[clave]:
+            fecha = visita["fecha"] or "sin fecha"
+            con_fecha.append(usar(visita["numero"], [f"{propio} · {fecha}", f"{propio} · {fecha} {visita['hora']}".strip()]))
+
+    if repetidas:
+        avisos.append(f"Filas repetidas (misma OT y misma visita) que cuentan una sola vez: {repetidas}")
+    if viejas:
+        avisos.append(
+            "Visitas anteriores de OTs que siguen por asignar, que no cuentan aparte porque vale la más reciente: "
+            f"{len(viejas)} ({_ejemplos(viejas)})"
+        )
+    if con_fecha:
+        avisos.append(
+            "Visitas anteriores ya asignadas o cerradas, que aparecen con su fecha junto al código: "
+            f"{len(con_fecha)} ({_ejemplos(con_fecha)})"
+        )
+    return codigos, avisos

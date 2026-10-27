@@ -66,7 +66,7 @@ flowchart LR
 |---|---|
 | `main.py` | Crea la app, CORS, y monta los routers bajo `/api` |
 | `assignment_routes.py` | Endpoints del plan: Metabase, catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
-| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. |
+| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. |
 | `geocoding.py` | Ubica las OTs sin GPS con Nominatim: municipio enseguida, dirección en segundo plano, con caché en `data/geocache.json` |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
