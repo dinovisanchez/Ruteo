@@ -315,7 +315,11 @@ function App() {
     if (valor === POR_CERCANIA) {
       setLoteOcupado(true);
       try {
-        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos: seleccion }));
+        // What each technician already has in the plan being viewed: "near" and "free" are decided on it
+        const planActual = Object.fromEntries((result?.decisiones || [])
+          .filter((d) => d.enviar_a === 'tecnico' && d.responsable_id)
+          .map((d) => [d.codigo_bia, d.responsable_id]));
+        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos: seleccion, plan_actual: planActual }));
       } catch (error) {
         message.error(`No se pudo armar la propuesta: ${error.message}`);
       } finally {

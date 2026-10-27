@@ -6,7 +6,8 @@ export const POR_CERCANIA = 'cercania';
 
 /**
  * Bar for the OTs selected in the list: send all of them to one technician or contractor, let the
- * app decide, or group them by proximity (each group to the technician with the lowest UTR).
+ * app decide, or group them by proximity (each group to whoever has OTs nearby, else to a free
+ * technician, else to the lowest UTR).
  */
 const LoteBar = ({
   cantidad, tecnicos, empresas, onAplicar, onLimpiar, ocupado,
@@ -17,7 +18,7 @@ const LoteBar = ({
     {
       ...automatico,
       options: [
-        { value: POR_CERCANIA, label: 'Por cercanía: al técnico con UTR más baja' },
+        { value: POR_CERCANIA, label: 'Por cercanía: a quien esté cerca, libre o con menor UTR' },
         ...automatico.options,
       ],
     },

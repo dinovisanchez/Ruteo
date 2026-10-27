@@ -77,7 +77,7 @@ flowchart LR
 | Endpoint | Función | Qué hace |
 |---|---|---|
 | `POST /assign` | `assignment.asignar` | Decide a quién va cada OT del día y arma las rutas |
-| `POST /lote` | `assignment.repartir_lote` | Propuesta para varias OTs elegidas: grupos por cercanía, cada uno al técnico con la UTR más baja |
+| `POST /lote` | `assignment.repartir_lote` | Propuesta para varias OTs elegidas: grupos por cercanía, cada uno con las mismas reglas del plan (cerca, libre, menor UTR) |
 
 Cómo decide `asignar`:
 
@@ -86,8 +86,8 @@ Cómo decide `asignar`:
 3. Cada OT libre va al **equipo Bia** que cubre su OR y su zona (`data/zonas_bia.json`); si ningún equipo la cubre, a contratistas.
 4. Arma **cuadrillas** de 1 o 2 personas según lo que piden las OTs (`armar_cuadrillas`). Un técnico con una OT fijada de 2 personas no sale solo.
 5. Junta las OTs libres que están a **2 km o menos** entre sí (`grupos_cercanos`, `radio_grupo_km`): viajan como un solo punto, así las hace una sola cuadrilla. Si un grupo no cabe en ninguna jornada, se separa y se vuelve a resolver.
-6. Resuelve un **VRP con OR-Tools** (`_resolver_vrp`): varias bases, jornada como tope, tiempos por carretera con tránsito y duración por tipo de OT.
-7. Lo **reparte parejo** (`_resolver_balanceado`): con la carga de la semana de cada técnico (`uso_previo`), le da más a quien lleva menos; lo que sobra va primero al siguiente con menos carga.
+6. Decide la **cuadrilla de cada grupo libre** con reglas (`repartir_por_reglas`), entre las cuadrillas de su equipo en cuya jornada cabe: primero la que ya tiene OTs a 2 km o menos ese día; si ninguna, una que todavía no tiene OTs; si todas tienen OTs lejos, la de menor carga en la semana (`uso_previo` más lo del día). Cada decisión cuenta para las siguientes.
+7. Resuelve un **VRP con OR-Tools** (`_resolver_vrp`) con esas cuadrillas fijas: ordena cada ruta con tiempos por carretera y tránsito y revisa que quepa en la jornada.
 8. Lo que no cabe en los técnicos va al **contratista más cercano de su OR** (`_asignar_contratistas`).
 9. Devuelve rutas, una **decisión por OT** con su motivo, y métricas.
 
@@ -196,7 +196,7 @@ sequenceDiagram
   U->>A: marca OTs en la lista y elige «Por cercanía»
   A->>G: POST /asignar/lote (el mismo pedido del plan + códigos)
   G->>O: POST /lote
-  O-->>A: grupos a 2 km o menos, técnico con UTR más baja de cada uno
+  O-->>A: grupos a 2 km o menos, cada uno al técnico cercano, libre o de menor UTR
   U->>A: revisa y confirma (puede cambiar el técnico de un grupo)
   A->>G: POST /asignar con esas OTs fijadas
   G-->>A: plan nuevo
@@ -220,6 +220,7 @@ Para que Ruteo asigne directo en Olibia hace falta la petición que hace Olibia 
 | Una columna nueva de Metabase | La pregunta (SQL en el README) y `ALIAS_COLUMNAS` en `api_gateway/metabase.py`; el campo en `Activity` (`shared/models.py`) |
 | Duración o personas de un tipo de OT | En la app: *Tipos de OT*; los valores por defecto en `frontend/src/services/otTypes.js` |
 | Qué cubre cada equipo o el tránsito | `backend/data/zonas_bia.json` |
-| La distancia para juntar OTs | En la app: *Ajustes → Jornada → Juntar OTs a (km)* (`radio_grupo_km`) |
+| La distancia «cerca» (juntar OTs y preferir al técnico que ya tiene OTs cerca) | En la app: *Ajustes → Jornada → Distancia «cerca» (km)* (`radio_grupo_km`) |
+| El orden de las reglas de reparto | `repartir_por_reglas` en `backend/services/optimizer_service/assignment.py` |
 | Cómo decide el motor | `backend/services/optimizer_service/assignment.py` |
 | Qué OTs entran en el plan de un día | `plan_del_dia` en `api_gateway/assignment_routes.py` y `entraEnElDia` en `frontend/src/App.js` |

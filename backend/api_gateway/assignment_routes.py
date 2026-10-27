@@ -515,6 +515,8 @@ async def actualizar_config(config: AsignacionConfig):
 class LoteRequest(AsignarRequest):
     # OTs elegidas para asignar juntas
     codigos: List[str]
+    # OT → cuadrilla ("t1+t2") en el plan que se está viendo: lo que cada técnico ya tiene ese día
+    plan_actual: Dict[str, str] = Field(default_factory=dict)
 
 
 async def _pedido_del_dia(
@@ -642,7 +644,9 @@ async def asignar_lote(request: LoteRequest):
     if not request.codigos:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Elige al menos una OT")
     pedido, _, _, _, _, _ = await _pedido_del_dia(request)
-    return await _al_optimizador("/lote", {"pedido": pedido.model_dump(mode="json"), "codigos": request.codigos})
+    return await _al_optimizador("/lote", {
+        "pedido": pedido.model_dump(mode="json"), "codigos": request.codigos, "plan_actual": request.plan_actual,
+    })
 
 
 def puntos_ruta(asignada, incluir_retorno: bool) -> List[List[float]]:

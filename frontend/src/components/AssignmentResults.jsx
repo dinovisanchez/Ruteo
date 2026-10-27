@@ -423,7 +423,12 @@ const AssignmentResults = ({
         )}
         {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
-        {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
+        {metricas.tecnicos_disponibles && metricas.radio_grupo_km !== undefined ? (
+          <span>
+            Reparto: {metricas.radio_grupo_km > 0 ? `primero quien tiene OTs a ${km(metricas.radio_grupo_km)} km o menos, luego ` : 'primero '}
+            quien está libre y luego la menor UTR{metricas.reparto_por_semana ? ' de la semana' : ' del día'}
+          </span>
+        ) : null}
         {metricas.ots_agrupadas ? (
           <span>{metricas.ots_agrupadas} OTs van juntas por estar a {km(metricas.radio_grupo_km)} km o menos</span>
         ) : null}

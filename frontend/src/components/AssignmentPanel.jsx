@@ -600,9 +600,9 @@ const AssignmentPanel = forwardRef(({
             <Switch />
           </Form.Item>
           <Form.Item
-            label="Juntar OTs a (km)"
+            label="Distancia «cerca» (km)"
             name="radio_grupo_km"
-            tooltip="Las OTs a esta distancia o menos por carretera van al mismo técnico (el de UTR más baja); 0 = no juntar"
+            tooltip="Las OTs a esta distancia o menos por carretera van juntas, y una OT así de cerca de las OTs de un técnico va con él. 0 = no usar"
           >
             <InputNumber min={0} max={20} step={0.5} />
           </Form.Item>

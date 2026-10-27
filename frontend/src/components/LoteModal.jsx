@@ -5,6 +5,19 @@ const pct = (utr) => (utr === null || utr === undefined ? '—' : `${Math.round(
 const horas = (minutos) => (minutos / 60).toLocaleString('es-CO', { maximumFractionDigits: 1 });
 const km = (valor) => valor.toLocaleString('es-CO', { maximumFractionDigits: 1 });
 
+// Why that technician, by the same rules as the plan: near their OTs, free, or lowest UTR
+const REGLAS = { 1: 'cerca', 2: 'libre', 3: 'menor UTR', 4: 'no cabe' };
+const porQue = (opcion) => {
+  if (opcion.regla === 1) return `Tiene OTs hoy a ${km(opcion.km_cerca)} km`;
+  if (opcion.regla === 2) return 'No tiene OTs hoy y nadie más tiene OTs cerca';
+  if (opcion.regla === 3) return 'Todos tienen OTs lejos: el de menor UTR';
+  return 'No cabe en la jornada de nadie: el de menor UTR';
+};
+const detalle = (opcion) => {
+  if (opcion.km_cerca === null || opcion.km_cerca === undefined) return 'sin OTs hoy';
+  return `sus OTs a ${km(opcion.km_cerca)} km`;
+};
+
 /**
  * Proposal for a batch: the OTs close to each other go together, each group to the technician of
  * its team with the lowest UTR of the week. Each group's technician can be changed before applying.
@@ -51,8 +64,9 @@ const LoteModal = ({
       width={680}
     >
       <p className="lote-intro">
-        Las OTs a {km(radio)} km o menos entre sí van juntas al técnico de su equipo con la UTR más baja de la semana
-        (contando lo que ya tiene hoy). Puedes cambiar el técnico de cada grupo.
+        Las OTs a {km(radio)} km o menos entre sí van juntas. Cada grupo va al técnico que ya tiene OTs a {km(radio)} km o menos;
+        si nadie, a uno que no tenga OTs hoy; y si todos tienen OTs lejos, al de menor UTR de la semana. Puedes cambiar
+        el técnico de cada grupo.
       </p>
       <div className="lote-grupos">
         {grupos.map((g, i) => {
@@ -73,7 +87,8 @@ const LoteModal = ({
                   onChange={(valor) => setEleccion((prev) => ({ ...prev, [i]: valor }))}
                   options={g.opciones.map((o) => ({
                     value: o.tecnico_id,
-                    label: `${o.tecnico} · ${pct(o.utr)} en la semana${o.cabe ? '' : ' · no cabe hoy'}`,
+                    label: `${o.tecnico} · ${detalle(o)} · ${pct(o.utr)} en la semana${o.cabe ? '' : ' · no cabe hoy'}`,
+                    title: REGLAS[o.regla],
                   }))}
                   popupMatchSelectWidth={false}
                   style={{ minWidth: 260 }}
@@ -81,7 +96,7 @@ const LoteModal = ({
                 />
                 <span className="lote-grupo-meta">
                   {sugerido
-                    ? `UTR más baja: ${pct(g.utr_antes)} → ${pct(g.utr_despues)}`
+                    ? `${porQue(g)} · UTR ${pct(g.utr_antes)} → ${pct(g.utr_despues)}`
                     : `Lleva ${pct(opcion?.utr)} en la semana`}
                 </span>
               </div>

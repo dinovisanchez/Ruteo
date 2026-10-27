@@ -394,13 +394,15 @@ async def assign_activities(request: AssignmentRequest):
 class LotePedido(BaseModel):
     pedido: AssignmentRequest
     codigos: List[str]
+    # OT → cuadrilla ("t1+t2") que le da el plan actual: lo que cada técnico ya tiene ese día
+    plan_actual: Dict[str, str] = {}
 
 
 @app.post("/lote", response_model=dict)
 async def lote(request: LotePedido):
     """Propuesta para un lote: OTs cercanas juntas, cada grupo al técnico con la UTR más baja"""
     try:
-        return repartir_lote(request.pedido, request.codigos)
+        return repartir_lote(request.pedido, request.codigos, request.plan_actual)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
