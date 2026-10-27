@@ -416,6 +416,8 @@ WHERE deleted_at IS NULL
 ORDER BY fecha_visita NULLS LAST, card_id;
 ```
 
+La misma consulta está en [docs/pregunta_metabase.sql](docs/pregunta_metabase.sql), para copiarla entera: en el Mac, `pbcopy < docs/pregunta_metabase.sql` la deja en el portapapeles.
+
 **Quién creó la OT.** `Creado por` y `Fecha de creación` salen en la lista (debajo de cada OT), en la tabla completa, en el CSV y en la búsqueda. En `operations.visitas_general` el creador es `wo_generate_by` (no hay `created_by`) y la fecha, `created_at`. La app reconoce también `Creada por`, `Creador` y `Created by`.
 
 **Si Ruteo no cuadra con Olibia.** Ruteo solo ve lo que trae la pregunta. Para comparar un día (por ejemplo el 29 de octubre) corre en Metabase, sin guardarla, esta consulta y compárala con Olibia filtrado en ese día y los mismos OR:
