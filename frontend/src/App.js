@@ -67,11 +67,24 @@ const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
   return { dentro: false, texto: 'No entró en el plan' };
 };
 
-const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
+// What the plan depends on from each OT: if Metabase changes any of it, the plan is outdated
+const firmaOts = (ots) => ots
+  .map((a) => [a.codigo_bia, a.situacion, a.fecha_visita, a.hora_visita, a.asignado_a, a.contratista_asignado].join('~'))
+  .sort()
+  .join('|');
 // A visit already closed (by the Situación column): it only counts for utilization
 const esCerrada = (a, columnaSituacion) => Boolean(
-  columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad'),
+  a.cerrada || (columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad')),
 );
+// Puts back the manual edits of `previas` (code → previous value, undefined = there was none)
+const restaurar = (actuales, previas) => {
+  const next = { ...actuales };
+  Object.entries(previas).forEach(([codigo, valor]) => {
+    if (valor === undefined) delete next[codigo];
+    else next[codigo] = valor;
+  });
+  return next;
+};
 
 /**
  * Whether an OT belongs to the plan of `dia`: the ones whose visit date is that day, assigned or
@@ -197,7 +210,9 @@ function App() {
   const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
-  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false, autoRefresh: false });
+  const [panelState, setPanelState] = useState({
+    canExtract: false, fetching: false, autoRefresh: false, errorLectura: null, firma: null, disponibles: null,
+  });
   // OTs selected in the list to assign together, and the proposal "by proximity" for them
   const [seleccion, setSeleccion] = useState([]);
   const [propuesta, setPropuesta] = useState(null);
@@ -210,6 +225,8 @@ function App() {
   const baseRef = useRef(null);
   // Exactly what was sent for the current plan (week load, road times...), for the batch proposal
   const ultimoPedidoRef = useRef(null);
+  // Number of the latest plan request: an answer to an older one (another day, earlier edits) is dropped
+  const turnoRef = useRef(0);
 
   useEffect(() => {
     try {
@@ -237,13 +254,22 @@ function App() {
     setActualizado(dayjs());
   }, []);
 
+  /**
+   * Calculates the plan of a day. Only the latest request counts: if another one starts meanwhile
+   * (another day, another edit, the automatic update), this answer is dropped. Returns "ok", "error"
+   * or "reemplazado".
+   */
   const handleAssign = useCallback(async (base, overrides = {}) => {
+    turnoRef.current += 1;
+    const turno = turnoRef.current;
+    const vigente = () => turno === turnoRef.current;
     baseRef.current = base;
     const diaPlan = overrides.dia ?? dia;
+    const { firma, ...ajustes } = base;
     // Only the OTs of the plan travel to the server: pending ones and those assigned for that day
     // (the history used for utilization stays in the browser)
     const request = {
-      ...base,
+      ...ajustes,
       actividades: base.actividades.filter((a) => entraEnElDia(a, diaPlan, hoy)),
       dia: diaPlan,
       fijas: overrides.fijas ?? fijas,
@@ -267,16 +293,18 @@ function App() {
           });
           request.uso_previo = Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.usado_min]));
           request.disponible_previo = semana.tecnicos[0]?.disponible_min || 0;
-          setUtrSemana(Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.utr])));
+          if (vigente()) setUtrSemana(Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.utr])));
         } catch (error) {
           console.warn('Sin la carga de la semana: el reparto solo equilibra el día', error);
-          setUtrSemana({});
+          if (vigente()) setUtrSemana({});
         }
       } else {
         setUtrSemana({});
       }
+      if (!vigente()) return 'reemplazado';
       let pedido = request;
       let assignment = await assignActivities(pedido);
+      if (!vigente()) return 'reemplazado';
       // The backend could not reach the road server: the browser asks for the road times and the plan is redone
       if (!assignment.metricas.tiempos_por_vias) {
         message.loading({ content: 'Consultando tiempos por carretera desde el navegador...', key: 'assign', duration: 0 });
@@ -287,23 +315,26 @@ function App() {
             .map((a) => [a.coordinates.latitude, a.coordinates.longitude]),
         ];
         const matriz = await matrizPorVias(puntos);
-        if (matriz) {
+        if (matriz && vigente()) {
           pedido = { ...request, matriz };
           assignment = await assignActivities(pedido);
         }
       }
+      if (!vigente()) return 'reemplazado';
       ultimoPedidoRef.current = pedido;
       setResult(assignment);
       setDiaVacio(null);
       setIncluirRetorno(request.jornada.incluir_retorno);
-      setAssignedCodes(codesKey(base.actividades));
+      setAssignedCodes(firmaOts(base.actividades));
       const m = assignment.metricas;
       message.success({
         content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} a técnicos, ${m.ots_con_contratistas} a contratistas`,
         key: 'assign',
         duration: 3,
       });
+      return 'ok';
     } catch (error) {
+      if (!vigente()) return 'reemplazado';
       if (error.message.startsWith('No hay OTs')) {
         setDiaVacio(diaPlan);
         message.info({ content: `${dayjs(diaPlan).format('ddd D MMM')}: no hay OTs para este día`, key: 'assign', duration: 3 });
@@ -311,10 +342,24 @@ function App() {
         console.error('Assignment error:', error);
         message.error({ content: `Error calculando el plan: ${error.message}`, key: 'assign', duration: 10 });
       }
+      return 'error';
     } finally {
-      setLoading(false);
+      if (vigente()) setLoading(false);
     }
   }, [dia, hoy, fijas, catalog, capacidad]);
+  // The panel calls the latest version (with the day and edits of now), even after a long read
+  const handleAssignRef = useRef(handleAssign);
+  handleAssignRef.current = handleAssign;
+  const onAssign = useCallback((base, overrides) => handleAssignRef.current(base, overrides), []);
+
+  // Recalculates with the panel's current settings (available technicians, mode, workday...);
+  // nothing if there is no plan yet
+  const recalcular = async (overrides = {}) => {
+    if (!baseRef.current) return null;
+    const pedido = panelRef.current ? await panelRef.current.pedido() : baseRef.current;
+    if (!pedido) return 'error';
+    return handleAssignRef.current(pedido, overrides);
+  };
 
   // A new day started: whoever was looking at today moves to the new today, and the plan is redone
   // (with fresh OTs from Metabase if the automatic update is on): overdue pending OTs move to today
@@ -330,7 +375,7 @@ function App() {
   const nuevoDiaRef = useRef(null);
   nuevoDiaRef.current = () => {
     if (panelState.canExtract && panelState.autoRefresh) panelRef.current?.refresh();
-    else if (baseRef.current) handleAssign(baseRef.current);
+    else recalcular();
   };
   useEffect(() => {
     if (diasNuevos) nuevoDiaRef.current();
@@ -342,7 +387,21 @@ function App() {
     setAlcanceTabla((actual) => (actual === 'todas' || actual === 'sin_fecha' ? 'dia' : actual));
     // Choosing a day goes back to that day's plan
     setEstado((actual) => (actual === 'backlog' ? 'pendientes' : actual));
-    if (baseRef.current) handleAssign(baseRef.current, { dia: nuevo });
+    recalcular({ dia: nuevo });
+  };
+
+  // Applies manual edits and recalculates; if the plan cannot be recalculated they are undone, so the
+  // list does not say «Elegido a mano» for a change that did not happen
+  const aplicarEdiciones = async (next) => {
+    const previas = Object.fromEntries(Object.keys({ ...fijas, ...next }).map((c) => [c, fijas[c]]));
+    setFijas(next);
+    const resultado = await recalcular({ fijas: next });
+    if (resultado === 'error') {
+      const cambiadas = Object.fromEntries(Object.entries(previas).filter(([c, v]) => v !== next[c]));
+      setFijas((actuales) => restaurar(actuales, cambiadas));
+      message.warning('El cambio no se aplicó porque el plan no se pudo recalcular', 6);
+    }
+    return resultado;
   };
 
   const handleEdit = (codigo, value, situacion) => {
@@ -350,8 +409,7 @@ function App() {
     // "Que decida la app" on a pending OT is the same as no edit
     if (!value || (value === 'auto' && situacion !== 'asignada')) delete next[codigo];
     else next[codigo] = value;
-    setFijas(next);
-    if (baseRef.current) handleAssign(baseRef.current, { fijas: next });
+    aplicarEdiciones(next);
   };
 
   // After assigning a batch, the map shows the route of whoever received it
@@ -373,6 +431,11 @@ function App() {
     const codigos = soloPendientes ? seleccion.filter((c) => situacionDe[c] === 'pendiente') : seleccion;
     if (!codigos.length) return;
     if (valor === POR_CERCANIA) {
+      // The proposal starts from the plan on screen: it has to be calculated with the current settings
+      if (ajustesCambiados) {
+        message.warning('Cambiaste técnicos o ajustes: recalcula el plan (↻) antes de armar el lote', 6);
+        return;
+      }
       setLoteOcupado(true);
       try {
         // What each technician already has in the plan being viewed: "near" and "free" are decided on it
@@ -396,25 +459,19 @@ function App() {
     const [tipo, id] = valor.split(':');
     const nombre = tipo === 'tecnico' ? config.tecnicos.find((t) => t.id === id)?.nombre
       : catalog.empresas.find((e) => e.id === id)?.nombre;
-    setFijas(next);
     setSeleccion([]);
-    await handleAssign(baseRef.current, { fijas: next });
-    if (nombre) verRutas([`${tipo === 'tecnico' ? 't' : 'c'}:${nombre}`]);
+    if (await aplicarEdiciones(next) === 'ok' && nombre) verRutas([`${tipo === 'tecnico' ? 't' : 'c'}:${nombre}`]);
   };
 
   const confirmarCercania = async (asignaciones, tecnicosElegidos) => {
-    const next = { ...fijas, ...asignaciones };
-    setFijas(next);
     setPropuesta(null);
     setSeleccion([]);
-    await handleAssign(baseRef.current, { fijas: next });
-    verRutas([...new Set(tecnicosElegidos.filter(Boolean))].map((n) => `t:${n}`));
+    if (await aplicarEdiciones({ ...fijas, ...asignaciones }) === 'ok') {
+      verRutas([...new Set(tecnicosElegidos.filter(Boolean))].map((n) => `t:${n}`));
+    }
   };
 
-  const clearEdits = () => {
-    setFijas({});
-    if (baseRef.current) handleAssign(baseRef.current, { fijas: {} });
-  };
+  const clearEdits = () => aplicarEdiciones({});
 
   // Activity of each OT: from Metabase and, for the plan, as the optimizer returned it
   const actividades = useMemo(() => {
@@ -503,7 +560,7 @@ function App() {
   }, [ots, plan, hoy, busqueda, asignadoA, pasaOr]);
 
   // For each pending OT, the OTs already assigned in Metabase near it, with the plan's distance «cerca»
-  const radioCerca = baseRef.current?.jornada?.radio_grupo_km || 2;
+  const radioCerca = baseRef.current?.jornada?.radio_grupo_km ?? 2;
   const cercanas = useMemo(
     () => asignadasCerca(ots, { hoy, radio: radioCerca, cerrada: (a) => esCerrada(a, mapeo.situacion) }),
     [ots, hoy, radioCerca, mapeo],
@@ -580,8 +637,13 @@ function App() {
   };
 
   const busy = loading || panelState.fetching;
-  const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
-  const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
+  const stale = Boolean(result && ots) && firmaOts(ots) !== assignedCodes;
+  // Technicians, mode or workday changed in the panel after the plan on screen was calculated
+  const ajustesCambiados = Boolean(plan && panelState.firma && baseRef.current?.firma
+    && panelState.firma !== baseRef.current.firma);
+  // Technicians available as the panel has them now (switching one off counts at once for editing)
+  const disponibles = new Set(panelState.disponibles !== null
+    ? panelState.disponibles.split('|') : baseRef.current?.tecnicos_ids || []);
   const tecnicosEdicion = config.tecnicos
     .filter((t) => t.activo !== false)
     .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id), utr: utrSemana[t.id] }));
@@ -675,7 +737,7 @@ function App() {
               ref={panelRef}
               ots={ots}
               onOtsLoaded={handleOtsLoaded}
-              onAssign={handleAssign}
+              onAssign={onAssign}
               loading={loading}
               config={config}
               onConfigChange={setConfig}
@@ -813,12 +875,40 @@ function App() {
             </div>
 
             <Spin spinning={loading} tip="Calculando el plan del día...">
+              {panelState.errorLectura && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  className="ios-alert"
+                  message={`No se pudo actualizar desde Metabase a las ${panelState.errorLectura.hora}`}
+                  description={`${panelState.errorLectura.mensaje}${actualizado
+                    ? `. Lo que ves es de la lectura de las ${actualizado.format('HH:mm')}.` : ''}`}
+                  action={(
+                    <Button size="small" disabled={busy || !panelState.canExtract} onClick={() => panelRef.current?.extract()}>
+                      Reintentar
+                    </Button>
+                  )}
+                />
+              )}
               {stale && (
                 <Alert
                   type="info"
                   showIcon
                   className="ios-alert"
                   message="Las OTs cambiaron desde el último cálculo. Pulsa recalcular (↻) arriba a la derecha."
+                />
+              )}
+              {ajustesCambiados && !stale && (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="ios-alert"
+                  message="Cambiaste técnicos o ajustes: el plan en pantalla todavía no los tiene en cuenta."
+                  action={(
+                    <Button size="small" type="primary" disabled={busy} onClick={() => panelRef.current?.recalc()}>
+                      Recalcular
+                    </Button>
+                  )}
                 />
               )}
               {vista === 'tabla' && (

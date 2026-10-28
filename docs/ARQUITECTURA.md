@@ -123,7 +123,7 @@ Cómo decide `asignar`:
 
 | Archivo | Qué hace |
 |---|---|
-| `App.js` | Estado de la pantalla: día del plan (y el cambio solo a medianoche), filtros, cuadros, ediciones a mano (`fijas`), selección y asignación por lote. Llama a `/asignar` con la carga de la semana para el reparto parejo |
+| `App.js` | Estado de la pantalla: día del plan (y el cambio solo a medianoche), filtros, cuadros, ediciones a mano (`fijas`), selección y asignación por lote. Llama a `/asignar` con la carga de la semana para el reparto parejo. Cada cálculo lleva un número (`turnoRef`) y solo se muestra la respuesta del último; los recálculos piden al panel el pedido con los ajustes de ese momento (`pedido()`) |
 | `components/AssignmentPanel.jsx` | Panel izquierdo: técnicos por equipo y disponibilidad, contratistas por OR, tipos de OT y ajustes. Trae las OTs de Metabase, se actualiza solo y arma el pedido del plan |
 | `components/AssignmentResults.jsx` | Cuadros que filtran, lista de decisiones con el lápiz para editar y casillas para el lote, «Falta por asignar» y rutas |
 | `components/AssignmentMapView.jsx` | Mapa Leaflet: bases, OTs y rutas por carretera |

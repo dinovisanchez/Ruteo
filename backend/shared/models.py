@@ -1,5 +1,5 @@
 """Pydantic models for Route Optimizer system"""
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime, time
 
@@ -39,6 +39,8 @@ class Activity(BaseModel):
     extras: Dict[str, Any] = Field(default_factory=dict)
     # "asignada" cuando en Metabase ya tiene fecha y responsables
     situacion: Literal["pendiente", "asignada"] = "pendiente"
+    # Visita ya hecha (Situación «Cerrada»): cuenta como asignada pero no se vuelve a planear
+    cerrada: bool = False
     fecha_visita: Optional[str] = None  # YYYY-MM-DD
     hora_visita: Optional[str] = None  # HH:MM, si Metabase trae la hora
     asignado_a: Optional[str] = None  # Electricistas asignados en Metabase
@@ -505,6 +507,17 @@ class MatrizVial(BaseModel):
     puntos: List[List[float]]  # [[lat, lon], ...]
     km: List[List[Optional[float]]]
     minutos: List[List[Optional[float]]]
+
+    @model_validator(mode="after")
+    def cuadrada(self) -> "MatrizVial":
+        """Una fila y una columna por punto: una matriz incompleta del navegador se rechaza"""
+        n = len(self.puntos)
+        if any(len(p) != 2 for p in self.puntos):
+            raise ValueError("Cada punto de la matriz debe tener latitud y longitud")
+        for nombre, filas in (("km", self.km), ("minutos", self.minutos)):
+            if len(filas) != n or any(len(fila) != n for fila in filas):
+                raise ValueError(f"La matriz de {nombre} debe ser de {n}×{n}, una fila y una columna por punto")
+        return self
 
 
 class JornadaConfig(BaseModel):

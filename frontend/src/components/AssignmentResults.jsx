@@ -34,9 +34,10 @@ const fechaEnPlan = (actividad, dia) => {
   return `Visita el ${dayjs(fecha).format('D MMM')}${hora}`;
 };
 
-// Where the destination comes from: still pending (a suggestion), assigned in Metabase, or edited
-const origenDecision = (d, editada) => {
+// Where the destination comes from: still pending (a suggestion), assigned or closed in Metabase, or edited
+const origenDecision = (d, editada, cerrada = false) => {
   if (d.enviar_a === 'sin_asignar') return 'Sin asignar';
+  if (cerrada) return 'Cerrada en Metabase';
   if (editada) return d.situacion === 'asignada' ? 'Reasignada a mano' : 'Elegido a mano, sigue por asignar';
   return d.situacion === 'asignada' ? 'Asignada en Metabase' : 'Sugerido por Ruteo';
 };
@@ -178,7 +179,9 @@ export const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
 ];
 
 // Who attends the OT; the pencil opens the list to send it to someone else
-const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
+const EnviarA = ({
+  decision: d, editada, cerrada, options, onEdit, editing,
+}) => {
   const [abierto, setAbierto] = useState(false);
   return (
     <div className="assignee">
@@ -201,7 +204,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
         )}
       </div>
       <div className="assignee-sub">
-        {origenDecision(d, editada)}{d.enviar_a !== 'sin_asignar' ? ` · ${DESTINO[d.enviar_a]}` : ''}
+        {origenDecision(d, editada, cerrada)}{d.enviar_a !== 'sin_asignar' ? ` · ${DESTINO[d.enviar_a]}` : ''}
       </div>
       {abierto && (
         <Select
@@ -255,6 +258,8 @@ const AssignmentResults = ({
     parada: paradas[d.codigo_bia],
   }));
   const rows = visibles ? allRows.filter((r) => visibles.has(r.decision.codigo_bia)) : allRows;
+  // The ones that can still be (re)assigned: not the visits already closed
+  const abiertas = rows.filter((r) => !r.actividad?.cerrada);
 
   // Routes with some OT that passes the filters: their km, hours and cost are the ones the tiles add up
   const rutasVisibles = result.rutas
@@ -413,8 +418,10 @@ const AssignmentResults = ({
           <EnviarA
             decision={d}
             editada={fijas[d.codigo_bia]}
+            cerrada={Boolean(r.actividad?.cerrada)}
             options={editOptions(tecnicos, empresas, alternativas, d.situacion === 'asignada')}
-            onEdit={onEdit}
+            // A closed visit was already done: it is not sent to anyone else
+            onEdit={r.actividad?.cerrada ? undefined : onEdit}
             editing={editing}
           />
         );
@@ -512,8 +519,8 @@ const AssignmentResults = ({
           >
             Solo por asignar ({rows.filter((r) => r.decision.situacion === 'pendiente').length})
           </Button>
-          <Button type="link" size="small" onClick={() => onSeleccion(rows.map((r) => r.key))}>
-            Por asignar y asignadas ({rows.length})
+          <Button type="link" size="small" onClick={() => onSeleccion(abiertas.map((r) => r.key))}>
+            Por asignar y asignadas ({abiertas.length})
           </Button>
           {seleccion.length > 0 && (
             <Button type="link" size="small" onClick={() => onSeleccion([])}>Ninguna</Button>
@@ -536,6 +543,7 @@ const AssignmentResults = ({
             preserveSelectedRowKeys: true,
             columnWidth: 40,
             fixed: true,
+            getCheckboxProps: (r) => ({ disabled: Boolean(r.actividad?.cerrada) }),
           } : undefined}
           pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
           expandable={{

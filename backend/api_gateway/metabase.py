@@ -133,7 +133,12 @@ async def consultar_pregunta(card_id: str) -> List[Dict[str, Any]]:
     if respuesta.status_code not in (200, 202):
         raise MetabaseError(f"Metabase respondió HTTP {respuesta.status_code}: {respuesta.text[:300]}")
 
-    filas = respuesta.json()
+    try:
+        filas = respuesta.json()
+    except ValueError:
+        raise MetabaseError(
+            f"Metabase respondió algo que no son filas de la pregunta {card_id} (¿se cortó la respuesta?). Intenta de nuevo."
+        )
     if isinstance(filas, dict):
         # Metabase devuelve un objeto (no una lista) cuando la consulta falla
         raise MetabaseError(f"La pregunta {card_id} falló en Metabase: {filas.get('error') or filas}")
@@ -224,6 +229,11 @@ def _situacion(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
     return "pendiente"
 
 
+def _cerrada(fila: Dict[str, Any], mapeo: Dict[str, str]) -> bool:
+    """La visita ya se hizo: la columna Situación dice «Cerrada»"""
+    return "situacion" in mapeo and "cerrad" in normalizar_texto(_texto(fila.get(mapeo["situacion"])))
+
+
 def _hora(valor: Any) -> Optional[str]:
     """HH:MM de una fecha con hora (ISO o texto); None si no trae hora o es medianoche"""
     coincidencia = re.search(r"[T ](\d{1,2}):(\d{2})", _texto(valor))
@@ -303,6 +313,7 @@ def filas_a_actividades(
             coordinates=coords,
             extras=dict(fila),
             situacion=_situacion(fila, mapeo),
+            cerrada=_cerrada(fila, mapeo),
             fecha_visita=_fecha(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
             hora_visita=_hora(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
             asignado_a=(_texto(fila.get(mapeo["asignado_a"])) or None) if "asignado_a" in mapeo else None,

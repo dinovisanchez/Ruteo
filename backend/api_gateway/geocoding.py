@@ -63,10 +63,14 @@ async def _buscar(client: httpx.AsyncClient, consulta: str) -> Optional[GPSCoord
         headers={"User-Agent": USER_AGENT},
     )
     respuesta.raise_for_status()
-    resultados = respuesta.json()
-    if not resultados:
-        return None
-    lat, lon = float(resultados[0]["lat"]), float(resultados[0]["lon"])
+    try:
+        resultados = respuesta.json()
+        if not resultados:
+            return None
+        lat, lon = float(resultados[0]["lat"]), float(resultados[0]["lon"])
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        # Una página de error o un aviso de límite en vez de JSON: se trata como si no respondiera
+        raise httpx.DecodingError(f"Nominatim respondió algo que no son resultados: {e}") from e
     return GPSCoordinates(latitude=lat, longitude=lon) if validate_gps_colombia(lat, lon)[0] else None
 
 

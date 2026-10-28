@@ -87,6 +87,10 @@ const AssignmentPanel = forwardRef(({
   const [typesModalOpen, setTypesModalOpen] = useState(false);
   const [orInfo, setOrInfo] = useState({ operadores: [], resueltos: {} });
   const [hojaTecnicos, setHojaTecnicos] = useState([]);
+  // Changes in the Jornada fields, to know the plan on screen used other settings
+  const [cambiosJornada, setCambiosJornada] = useState(0);
+  // Last automatic or manual read that failed: shown until a read works again
+  const [errorLectura, setErrorLectura] = useState(null);
   const knownRef = useRef(null);
 
   useEffect(() => {
@@ -175,11 +179,23 @@ const AssignmentPanel = forwardRef(({
 
   const cuadrillasManuales = Object.entries(parejas).filter(([a, b]) => a < b).map(([a, b]) => [a, b]);
 
-  const runAssign = async (actividades) => {
-    if (!actividades?.length) return;
-    const values = await form.validateFields();
+  // Everything that changes the plan: when it differs from the one of the plan on screen, it is outdated
+  const firma = JSON.stringify([modo, orFilter, disponibles, cuadrillasManuales, transito, cambiosJornada]);
+
+  // The plan request with the current settings; null (and Ajustes opens) if a field is not valid
+  const armarPedido = async (actividades) => {
+    if (!actividades?.length) return null;
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch (error) {
+      setAbiertas((prev) => (prev.includes('ajustes') ? prev : [...prev, 'ajustes']));
+      message.error('Revisa la jornada en Ajustes: hay un campo vacío o fuera de rango', 6);
+      return null;
+    }
     const tipos = [...new Set(actividades.map((a) => a.servicio))];
-    await onAssign({
+    return {
+      firma,
       modo,
       actividades,
       or_filtro: orFilter,
@@ -199,7 +215,12 @@ const AssignmentPanel = forwardRef(({
         incluir_retorno: values.incluir_retorno,
         tiempos_servicio: tipos.map((s) => ({ servicio: s, duracion_minutos: otTypeSettings(s, config.tipos_ot).minutos })),
       },
-    });
+    };
+  };
+
+  const runAssign = async (actividades) => {
+    const pedido = await armarPedido(actividades);
+    if (pedido) await onAssign(pedido);
   };
 
   // When the OTs were last read from Metabase, and whether a reading is under way
@@ -222,6 +243,7 @@ const AssignmentPanel = forwardRef(({
       writeKnownOts([...knownRef.current]);
 
       setFetchInfo(data);
+      setErrorLectura(null);
       onOtsLoaded(data.actividades, nuevas, 'Metabase', data.mapeo);
       if (nuevas.size && silent) {
         notification.info({
@@ -232,6 +254,8 @@ const AssignmentPanel = forwardRef(({
       }
       return data.actividades;
     } catch (error) {
+      // The automatic update fails quietly but leaves a notice on screen until a read works
+      setErrorLectura({ mensaje: error.message, hora: dayjs().format('HH:mm') });
       if (!silent) message.error(error.message, 8);
       return null;
     } finally {
@@ -242,7 +266,8 @@ const AssignmentPanel = forwardRef(({
 
   const extractAndRecommend = async (silent) => {
     const actividades = await loadOts(silent);
-    if (actividades?.length) await runAssign(actividades);
+    // The read takes a while: the plan uses the settings as they are now, not as they were when it started
+    if (actividades?.length) await actionsRef.current.assign(actividades);
     else if (actividades && !silent) message.info('La pregunta no devolvió OTs');
   };
 
@@ -252,11 +277,15 @@ const AssignmentPanel = forwardRef(({
     extract: () => extractAndRecommend(false),
     refresh: () => extractAndRecommend(true),
     recalc: () => runAssign(ots),
+    assign: (actividades) => runAssign(actividades),
+    pedido: () => armarPedido(ots),
   };
   useImperativeHandle(ref, () => ({
     extract: () => actionsRef.current.extract(),
     refresh: () => actionsRef.current.refresh(),
     recalc: () => actionsRef.current.recalc(),
+    // The request with the current settings, for recalculating after an edit or a change of day
+    pedido: () => actionsRef.current.pedido(),
     // From the toolbar: expands a section and scrolls to it (after the panel opens)
     abrirSeccion: (key) => {
       setAbiertas((prev) => (prev.includes(key) ? prev : [...prev, key]));
@@ -273,8 +302,10 @@ const AssignmentPanel = forwardRef(({
 
   const canExtract = Boolean(status?.configurado && cardId.trim());
   useEffect(() => {
-    onStateChange({ canExtract, fetching, autoRefresh });
-  }, [canExtract, fetching, autoRefresh, onStateChange]);
+    onStateChange({
+      canExtract, fetching, autoRefresh, errorLectura, firma, disponibles: disponiblesKey,
+    });
+  }, [canExtract, fetching, autoRefresh, errorLectura, firma, disponiblesKey, onStateChange]);
 
   useEffect(() => {
     try {
@@ -327,7 +358,7 @@ const AssignmentPanel = forwardRef(({
       setFetchInfo(null);
       onOtsLoaded(data.activities, new Set(), `Archivo ${file.name}`, {});
       onSuccess(data);
-      await runAssign(data.activities);
+      await actionsRef.current.assign(data.activities);
     } catch (error) {
       message.error(`No se pudo leer el archivo: ${error.message}`);
       onError(error);
@@ -575,6 +606,7 @@ const AssignmentPanel = forwardRef(({
         form={form}
         layout="vertical"
         size="small"
+        onValuesChange={() => setCambiosJornada((n) => n + 1)}
         initialValues={{
           horario_inicio: dayjs('08:00', 'HH:mm'),
           horas_laborales: 8,

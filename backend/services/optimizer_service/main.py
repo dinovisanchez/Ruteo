@@ -405,6 +405,9 @@ async def lote(request: LotePedido):
         return repartir_lote(request.pedido, request.codigos, request.plan_actual)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error in batch proposal: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error armando la propuesta: {e}")
 
 
 if __name__ == "__main__":

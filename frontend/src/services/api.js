@@ -34,11 +34,15 @@ apiClient.interceptors.response.use(
     console.error('Response error:', error);
 
     // Extract error message
-    let errorMessage = 'An error occurred';
+    let errorMessage = 'Ocurrió un error';
     if (error.response) {
-      errorMessage = error.response.data?.detail || error.response.statusText;
+      const detalle = error.response.data?.detail;
+      // A request the backend rejects as invalid lists each field with its problem
+      errorMessage = Array.isArray(detalle)
+        ? detalle.map((d) => d.msg || JSON.stringify(d)).join('; ')
+        : detalle || error.response.statusText || `HTTP ${error.response.status}`;
     } else if (error.request) {
-      errorMessage = 'No response from server';
+      errorMessage = 'El backend no respondió (¿está corriendo ./iniciar.sh?)';
     } else {
       errorMessage = error.message;
     }

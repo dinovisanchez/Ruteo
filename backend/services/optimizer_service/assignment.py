@@ -1070,7 +1070,9 @@ def _decisiones(
             codigo_bia=codigo,
             enviar_a="externo",
             responsable=responsable,
-            motivo="Su responsable no está en la app: se deja como está y no entra en las rutas",
+            # Con nota (por ejemplo, cerrada por un técnico que hoy no está) la nota ya dice por qué
+            motivo=("Se deja como está y no entra en las rutas" if codigo in request.notas
+                    else "Su responsable no está en la app: se deja como está y no entra en las rutas"),
         )
 
     resultado = []

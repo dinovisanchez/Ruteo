@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     ]
     # The dev server moves to 3001, 3002... when 3000 is busy; accept any local port
     CORS_ORIGIN_REGEX: str = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+    # Names the gateway answers to: a web page that points another domain at this computer
+    # (DNS rebinding) gets refused instead of using the Metabase key
+    ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "api-gateway"]
 
     # Optimization defaults
     DEFAULT_WORK_HOURS: float = 8.0
