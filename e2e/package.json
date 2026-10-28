@@ -1,0 +1,11 @@
+{
+  "name": "ruteo-e2e",
+  "private": true,
+  "description": "Pruebas de navegador de Ruteo con Metabase simulado",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

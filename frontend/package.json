@@ -1,21 +1,21 @@
 {
-  "name": "route-optimizer-frontend",
+  "name": "ruteo-frontend",
   "version": "1.0.0",
   "private": true,
-  "description": "Frontend for Route Optimizer - Field crew route optimization system",
-  "author": "Route Optimizer Team",
+  "description": "Ruteo: plan del día de las OTs de Bia (técnicos y contratistas por OR)",
+  "author": "Bia Energy",
   "license": "MIT",
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "axios": "^1.6.2",
-    "leaflet": "^1.9.4",
-    "react-leaflet": "^4.2.1",
-    "antd": "^5.11.5",
     "@ant-design/icons": "^5.2.6",
+    "antd": "^5.11.5",
+    "axios": "^1.6.2",
     "dayjs": "^1.11.10",
-    "web-vitals": "^2.1.4"
+    "leaflet": "^1.9.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "react-scripts": "5.0.1"
   },
   "scripts": {
     "start": "react-scripts start",

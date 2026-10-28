@@ -1,5 +1,5 @@
-"""Configuration settings for Route Optimizer services"""
-from pydantic_settings import BaseSettings
+"""Configuration of Ruteo's backend: read from backend/.env"""
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 import os
 
@@ -8,26 +8,15 @@ class Settings(BaseSettings):
     """Application settings with environment variable support"""
 
     # Project metadata
-    PROJECT_NAME: str = "Route Optimizer"
+    PROJECT_NAME: str = "Ruteo"
     VERSION: str = "1.0.0"
-    DESCRIPTION: str = "Microservices-based route optimization system for field crews"
+    DESCRIPTION: str = "Plan del día de las OTs: técnicos de Bia y contratistas por OR"
 
-    # Service URLs
-    DATA_SERVICE_URL: str = os.getenv("DATA_SERVICE_URL", "http://localhost:8001")
-    DISTANCE_SERVICE_URL: str = os.getenv("DISTANCE_SERVICE_URL", "http://localhost:8002")
+    # The gateway asks the optimizer for each plan
     OPTIMIZER_SERVICE_URL: str = os.getenv("OPTIMIZER_SERVICE_URL", "http://localhost:8003")
 
-    # Redis configuration
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
-    REDIS_DB: int = 0
-    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
-    CACHE_TTL: int = 3600  # 1 hour in seconds
-
-    # File upload configuration
-    UPLOAD_DIR: str = "./uploads"
+    # Excel/CSV upload: largest file accepted
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB
-    ALLOWED_EXTENSIONS: List[str] = [".xlsx", ".xls", ".csv"]
 
     # CORS configuration
     CORS_ORIGINS: List[str] = [
@@ -41,22 +30,11 @@ class Settings(BaseSettings):
     # (DNS rebinding) gets refused instead of using the Metabase key
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "api-gateway"]
 
-    # Optimization defaults
-    DEFAULT_WORK_HOURS: float = 8.0
-    DEFAULT_SPEED_KMH: float = 30.0
-    DEFAULT_START_TIME: str = "08:00"
-    DEFAULT_END_TIME: str = "17:00"
-
     # GPS validation (Colombia boundaries)
     MIN_LATITUDE: float = -4.2
     MAX_LATITUDE: float = 13.4
     MIN_LONGITUDE: float = -81.8
     MAX_LONGITUDE: float = -66.9
-
-    # Optimization parameters
-    MAX_ACTIVITIES_PER_CREW: int = 20
-    MIN_ACTIVITIES_PER_CREW: int = 1
-    OPTIMIZATION_TIMEOUT_SECONDS: int = 300  # 5 minutes
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -87,10 +65,8 @@ class Settings(BaseSettings):
     # El servidor público de OSRM pide máximo una consulta por segundo
     OSRM_PAUSA_SEGUNDOS: float = 1.0
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # El .env puede traer variables de otros componentes (ej. REACT_APP_*)
+    # El .env puede traer variables de otros componentes (ej. REACT_APP_*) o de versiones anteriores
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 
 # Global settings instance

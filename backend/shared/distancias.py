@@ -2,9 +2,8 @@
 import math
 from typing import Dict, Optional, Tuple
 
-from services.distance_service.calculator import haversine_distance
-
 from .models import GPSCoordinates, JornadaConfig, MatrizVial, ZonaTransito
+from .utils import haversine_distance
 from .zonas import recargo_transito
 
 # Sin OSRM, los primeros km de cada desplazamiento son urbanos y el resto es carretera

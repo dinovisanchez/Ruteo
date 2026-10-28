@@ -12,7 +12,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from shared.catalogo import cargar_catalogo, nombre_empresa, normalizar_texto
@@ -35,6 +35,7 @@ from shared.models import (
 )
 from shared.utils import setup_logging
 from . import metabase
+from .archivo import ArchivoError, leer_filas
 from .geocoding import geocodificar
 from . import trazado
 
@@ -126,7 +127,7 @@ def conteo_por_or(actividades: List[Activity]) -> Dict[str, int]:
 
 
 class OTsResponse(BaseModel):
-    card_id: str
+    card_id: Optional[str] = None  # Vacío cuando las OTs vienen de un archivo
     total_filas: int
     actividades: List[Activity]
     columnas: List[str]
@@ -430,6 +431,40 @@ async def metabase_ots(card_id: Optional[str] = None):
         total_filas=len(filas),
         actividades=actividades,
         columnas=list(filas[0].keys()) if filas else [],
+        mapeo=mapeo,
+        ors=conteo_por_or(actividades),
+        geocodificadas=geocodificadas,
+        sin_coordenadas=sum(1 for a in actividades if a.coordinates is None),
+        avisos=avisos + avisos_geo,
+    )
+
+
+@router.post("/upload", response_model=OTsResponse)
+async def subir_archivo(file: UploadFile = File(...)):
+    """
+    OTs desde un Excel (.xlsx) o CSV: se leen con las mismas columnas que la pregunta de Metabase
+    (Bia Code, OR, Dirección, Ciudad, Situación, Fecha de la visita...) y las que no traen GPS se
+    geocodifican. El archivo no se guarda.
+    """
+    contenido = await file.read(settings.MAX_UPLOAD_SIZE + 1)
+    if len(contenido) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"El archivo pasa de {settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+        )
+    try:
+        filas = leer_filas(file.filename or "", contenido)
+        actividades, mapeo, avisos = metabase.filas_a_actividades(filas)
+    except (ArchivoError, metabase.MetabaseError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not actividades:
+        raise HTTPException(status_code=422, detail="El archivo no tiene OTs con código")
+    geocodificadas, avisos_geo = await geocodificar(actividades)
+    logger.info(f"Archivo {file.filename}: {len(filas)} filas, {len(actividades)} OTs, {geocodificadas} geocodificadas")
+    return OTsResponse(
+        total_filas=len(filas),
+        actividades=actividades,
+        columnas=list(filas[0].keys()),
         mapeo=mapeo,
         ors=conteo_por_or(actividades),
         geocodificadas=geocodificadas,

@@ -34,9 +34,9 @@ from shared.utils import (
     add_minutes_to_time,
     calculate_utilization,
     get_service_time,
+    haversine_distance,
     setup_logging,
 )
-from ..distance_service.calculator import haversine_distance
 
 logger = setup_logging("optimizer-service", settings.LOG_LEVEL)
 

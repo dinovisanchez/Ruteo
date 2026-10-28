@@ -18,6 +18,9 @@ import {
   assignActivities, getCatalog, getOperators, getUtilization, getZones, proposeBatch,
 } from './services/api';
 import { asignadasCerca } from './services/cercania';
+import {
+  GRUPOS_PENDIENTES, entraEnElDia, esCerrada, firmaOts, grupoPendiente, matchesAssignee, restaurar,
+} from './services/plan';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
 
@@ -67,44 +70,7 @@ const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
   return { dentro: false, texto: 'No entró en el plan' };
 };
 
-// What the plan depends on from each OT: if Metabase changes any of it, the plan is outdated
-const firmaOts = (ots) => ots
-  .map((a) => [a.codigo_bia, a.situacion, a.fecha_visita, a.hora_visita, a.asignado_a, a.contratista_asignado].join('~'))
-  .sort()
-  .join('|');
-// A visit already closed (by the Situación column): it only counts for utilization
-const esCerrada = (a, columnaSituacion) => Boolean(
-  a.cerrada || (columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad')),
-);
-// Puts back the manual edits of `previas` (code → previous value, undefined = there was none)
-const restaurar = (actuales, previas) => {
-  const next = { ...actuales };
-  Object.entries(previas).forEach(([codigo, valor]) => {
-    if (valor === undefined) delete next[codigo];
-    else next[codigo] = valor;
-  });
-  return next;
-};
-
-/**
- * Whether an OT belongs to the plan of `dia`: the ones whose visit date is that day, assigned or
- * pending, as in Olibia. Only today's plan also takes the pending ones whose date already passed and
- * the undated pending ones, so they get planned. Assigned without a date also travel, so the server
- * can report them (they enter no plan).
- */
-const entraEnElDia = (a, dia, hoy) => {
-  if (a.fecha_visita === dia) return true;
-  if (!a.fecha_visita) return a.situacion === 'asignada' || dia === hoy;
-  return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
-};
 const ISO_DAY = 'YYYY-MM-DD';
-// Pending OTs of any date: overdue first, then today, the next days and those without a date
-const GRUPOS_PENDIENTES = { vencida: 0, hoy: 1, proxima: 2, sin_fecha: 3 };
-const grupoPendiente = (fecha, hoy) => {
-  if (!fecha) return 'sin_fecha';
-  if (fecha < hoy) return 'vencida';
-  return fecha === hoy ? 'hoy' : 'proxima';
-};
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // Everything the name search looks at
@@ -132,15 +98,6 @@ const assigneeOptions = (result, tecnicosApp) => {
   }
   return grupos.filter((g) => g.options.length);
 };
-
-// Several people can be selected: the OT matches if it goes to any of them
-const matchesAssignee = (decision, values) => !values.length || values.some((value) => {
-  if (value === 'sin') return decision.enviar_a === 'sin_asignar';
-  const nombre = value.slice(2);
-  if (value.startsWith('t:')) return decision.enviar_a === 'tecnico' && (decision.responsable || '').split(' + ').includes(nombre);
-  if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
-  return decision.enviar_a === 'externo' && decision.responsable === nombre;
-});
 
 /**
  * Today's date. It is checked every minute and when coming back to the tab, so it changes by

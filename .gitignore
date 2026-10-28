@@ -100,3 +100,7 @@ Thumbs.db
 backend/data/asignacion.json
 backend/data/geocache.json
 backend/data/*.tmp
+
+# Pruebas de navegador: dependencias, registros e informes
+e2e/node_modules/
+e2e/salida/

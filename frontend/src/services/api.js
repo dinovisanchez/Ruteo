@@ -56,7 +56,7 @@ apiClient.interceptors.response.use(
 /**
  * Upload activity file
  * @param {File} file - Excel or CSV file
- * @returns {Promise<Object>} Upload result with activities
+ * @returns {Promise<Object>} The OTs, read with the same columns as the Metabase question
  */
 export const uploadFile = async (file) => {
   const formData = new FormData();

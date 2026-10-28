@@ -354,11 +354,12 @@ const AssignmentPanel = forwardRef(({
 
   const handleUpload = async ({ file, onSuccess, onError }) => {
     try {
+      // The file is read like the Metabase question: same columns, same notices
       const data = await uploadFile(file);
-      setFetchInfo(null);
-      onOtsLoaded(data.activities, new Set(), `Archivo ${file.name}`, {});
+      setFetchInfo(data);
+      onOtsLoaded(data.actividades, new Set(), `Archivo ${file.name}`, data.mapeo);
       onSuccess(data);
-      await actionsRef.current.assign(data.activities);
+      await actionsRef.current.assign(data.actividades);
     } catch (error) {
       message.error(`No se pudo leer el archivo: ${error.message}`);
       onError(error);
@@ -540,7 +541,7 @@ const AssignmentPanel = forwardRef(({
           ? 'Carga el plan al abrir la app, cada pocos minutos y al empezar un nuevo día'
           : 'Al empezar un nuevo día solo se recalcula con las OTs ya cargadas'}
       </Text>
-      <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
+      <Upload accept=".xlsx,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
         <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
           o subir un Excel/CSV
         </Button>

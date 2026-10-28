@@ -1,5 +1,5 @@
 #!/bin/bash
-# Arranca Ruteo en este equipo: reinicia el backend (4 servicios) y abre el frontend.
+# Arranca Ruteo en este equipo: reinicia el backend (gateway y optimizador) y abre el frontend.
 # Uso: ./iniciar.sh   (Ctrl+C detiene todo)
 set -e
 RAIZ="$(cd "$(dirname "$0")" && pwd)"
@@ -7,13 +7,14 @@ LOGS="$RAIZ/logs"
 PATRON_BACKEND="uvicorn (api_gateway|services)\..*:app"
 mkdir -p "$LOGS"
 
-# Detiene el backend y el frontend de esta carpeta que sigan corriendo (por ejemplo, de antes de un git pull)
+# Detiene el backend y el frontend de esta carpeta que sigan corriendo (por ejemplo, de antes de un git pull,
+# incluidos los servicios de datos y distancias de versiones anteriores)
 pkill -f "$PATRON_BACKEND" 2>/dev/null || true
 pkill -f "$RAIZ/frontend/node_modules" 2>/dev/null || true
 sleep 1
 
 # Si otro programa ocupa los puertos del backend (por ejemplo, un backend viejo de otra carpeta), avisa y para
-for puerto in 8000 8001 8002 8003; do
+for puerto in 8000 8003; do
   ocupado=$(lsof -nP -iTCP:"$puerto" -sTCP:LISTEN 2>/dev/null | tail -n +2)
   if [ -n "$ocupado" ]; then
     pid=$(echo "$ocupado" | awk '{print $2}' | head -n 1)
@@ -36,8 +37,6 @@ if [ ! -f .env ]; then
 fi
 
 for servicio in \
-  "services.data_service.main:app 8001" \
-  "services.distance_service.main:app 8002" \
   "services.optimizer_service.main:app 8003" \
   "api_gateway.main:app 8000"; do
   set -- $servicio
@@ -64,5 +63,8 @@ fi
 
 echo "Backend listo (registros en logs/). Abriendo el frontend: usa la dirección «Local:» que aparece abajo."
 cd "$RAIZ/frontend"
-[ -d node_modules ] || npm install
+# Instala o actualiza los paquetes cuando cambian las versiones fijadas (package-lock.json)
+if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  npm install --no-audit --no-fund
+fi
 npm start
