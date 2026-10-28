@@ -15,22 +15,20 @@ jobs:
         # 3.9 es el Python que trae el Mac; 3.12 el de una instalación nueva
         python: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: backend/requirements*.txt
-      - run: pip install -r backend/requirements-dev.txt
-      - run: python -m pytest
+      - uses: actions/checkout@v5
+      # uv trae cualquier Python, también el 3.9 que ya no viene en las máquinas de GitHub
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python ${{ matrix.python }} .venv && uv pip install --python .venv -r requirements-dev.txt
+        working-directory: backend
+      - run: .venv/bin/python -m pytest
         working-directory: backend
 
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -52,14 +50,14 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r backend/requirements.txt
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
