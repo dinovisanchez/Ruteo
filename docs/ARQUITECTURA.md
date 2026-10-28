@@ -67,7 +67,7 @@ flowchart LR
 | `main.py` | Crea la app, CORS, y monta los routers bajo `/api` |
 | `assignment_routes.py` | Endpoints del plan: Metabase, catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
 | `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. |
-| `geocoding.py` | Ubica las OTs sin GPS con Nominatim: municipio enseguida, dirección en segundo plano, con caché en `data/geocache.json` |
+| `geocoding.py` | Ubica las OTs sin GPS con Nominatim: municipio enseguida, dirección en segundo plano, con caché en `data/geocache.json`. Las que solo tienen su municipio llevan `ubicacion_municipio` y no cuentan como cerca de nada |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
 | `routes.py`, `orchestrator.py` | Endpoints heredados del optimizador original (`/upload`, `/optimize`…); de ellos la pantalla usa solo `/upload` |
@@ -131,10 +131,12 @@ Cómo decide `asignar`:
 | `components/LoteBar.jsx` | Barra de las OTs seleccionadas: a un técnico, a un contratista o por cercanía |
 | `components/LoteModal.jsx` | Propuesta por cercanía: grupos y técnico de cada uno, editable |
 | `components/OtsTable.jsx` | Tabla completa con todas las columnas de la pregunta |
+| `components/AsignadasCerca.jsx` | Columna «Asignadas cerca» de «Falta por asignar» (lista y tabla completa) |
 | `components/TechniciansModal.jsx`, `OrContractorsModal.jsx`, `OtTypesModal.jsx` | Ventanas para editar técnicos, contratistas por OR y tipos de OT |
 | `services/api.js` | Todas las llamadas al gateway |
 | `services/osrm.js` | OSRM desde el navegador, de respaldo |
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
+| `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
 
 ## Endpoints y quién los usa
 

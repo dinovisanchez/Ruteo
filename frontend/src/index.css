@@ -1086,3 +1086,24 @@ body {
     display: none;
   }
 }
+
+/* Assigned OTs near a pending one (Falta por asignar) */
+.cerca-item + .cerca-item {
+  margin-top: 6px;
+}
+
+.cerca-quien {
+  font-size: 13px;
+}
+
+.cerca-dia {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cerca-mas {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: default;
+}

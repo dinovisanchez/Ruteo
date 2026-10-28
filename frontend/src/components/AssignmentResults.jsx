@@ -5,6 +5,7 @@ import {
 import { DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
+import { columnaCerca } from './AsignadasCerca';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
 
@@ -225,7 +226,7 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 
 const AssignmentResults = ({
   result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
-  onFiltrar, horasDia = 8.4, porAsignar = null, pendientesTodas = null, onPlanearDia, hoy,
+  onFiltrar, horasDia = 8.4, porAsignar = null, pendientesTodas = null, onPlanearDia, hoy, cercanas = {}, radioCerca = 2,
   seleccion = [], onSeleccion,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
@@ -360,6 +361,7 @@ const AssignmentResults = ({
     },
     { title: 'Fecha de visita', width: 190, render: (_, p) => fechaPendiente(p.actividad, p.grupo, hoy) },
     { title: 'OR', width: 120, render: (_, p) => p.actividad.or_operador },
+    columnaCerca(cercanas, radioCerca, (p) => p.actividad),
     {
       title: `Plan del ${dayjs(metricas.dia).format('D MMM')}`,
       width: 240,
@@ -460,6 +462,16 @@ const AssignmentResults = ({
             {' · '}{porAsignar.hoy} para hoy · {porAsignar.proximas} de próximos días · {porAsignar.sinFecha} sin fecha
           </span>
         )}
+        {pendientesTodas && (() => {
+          const conCerca = pendientesTodas.filter((p) => cercanas[p.actividad.codigo_bia]);
+          const mismoDia = conCerca.filter((p) => cercanas[p.actividad.codigo_bia].some((c) => c.mismoDia)).length;
+          return (
+            <span>
+              {conCerca.length} tienen OTs asignadas a {km(radioCerca)} km o menos
+              {conCerca.length ? ` (${mismoDia} ese mismo día)` : ''}
+            </span>
+          );
+        })()}
         {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
         {metricas.tecnicos_disponibles && metricas.radio_grupo_km !== undefined ? (
@@ -484,7 +496,7 @@ const AssignmentResults = ({
           rowKey={(p) => p.actividad.codigo_bia}
           columns={backlogColumns}
           dataSource={pendientesTodas}
-          scroll={{ x: 980 }}
+          scroll={{ x: 1260 }}
           pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
         />
       )}

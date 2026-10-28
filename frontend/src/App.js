@@ -17,6 +17,7 @@ import UtilizationDashboard from './components/UtilizationDashboard';
 import {
   assignActivities, getCatalog, getOperators, getUtilization, getZones, proposeBatch,
 } from './services/api';
+import { asignadasCerca } from './services/cercania';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
 
@@ -67,6 +68,10 @@ const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
 };
 
 const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
+// A visit already closed (by the Situación column): it only counts for utilization
+const esCerrada = (a, columnaSituacion) => Boolean(
+  columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad'),
+);
 
 /**
  * Whether an OT belongs to the plan of `dia`: the ones whose visit date is that day, assigned or
@@ -497,6 +502,13 @@ function App() {
         || (x.actividad.fecha_visita || '').localeCompare(y.actividad.fecha_visita || ''));
   }, [ots, plan, hoy, busqueda, asignadoA, pasaOr]);
 
+  // For each pending OT, the OTs already assigned in Metabase near it, with the plan's distance «cerca»
+  const radioCerca = baseRef.current?.jornada?.radio_grupo_km || 2;
+  const cercanas = useMemo(
+    () => asignadasCerca(ots, { hoy, radio: radioCerca, cerrada: (a) => esCerrada(a, mapeo.situacion) }),
+    [ots, hoy, radioCerca, mapeo],
+  );
+
   const porAsignar = useMemo(() => {
     const cuantas = (grupo) => pendientesTodas.filter((p) => p.grupo === grupo).length;
     return {
@@ -536,14 +548,13 @@ function App() {
     const decisiones = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d]));
     const filtroOr = (baseRef.current?.or_filtro || []).map(normalizeText);
     const calculadas = baseRef.current ? new Set(baseRef.current.actividades.map((a) => a.codigo_bia)) : null;
-    const columnaSituacion = mapeo.situacion;
     return Object.fromEntries(ots.map((a) => [a.codigo_bia, enElPlan(a, {
       decision: decisiones[a.codigo_bia],
       dia,
       hoy,
       filtroOr,
       calculadas,
-      cerrada: Boolean(columnaSituacion && normalizeText(String(a.extras?.[columnaSituacion] || '')).includes('cerrad')),
+      cerrada: esCerrada(a, mapeo.situacion),
     })]));
   }, [alcanceTabla, ots, plan, dia, hoy, mapeo]);
 
@@ -832,6 +843,8 @@ function App() {
                       mapeo={mapeo}
                       config={config}
                       enPlan={!backlog ? motivosPlan : null}
+                      cercanas={backlog ? cercanas : null}
+                      radioCerca={radioCerca}
                       enPlanTitulo={`En el plan del ${dayjs(dia).format('D MMM')}`}
                       title={backlog ? `Falta por asignar, todas las fechas (${otsFiltradas.length})` : {
                         dia: `En el plan del ${dayjs(dia).format('D MMM')} (${otsFiltradas.length})`,
@@ -866,6 +879,8 @@ function App() {
                   conteos={conteos}
                   porAsignar={porAsignar}
                   pendientesTodas={backlog ? pendientesTodas : null}
+                  cercanas={cercanas}
+                  radioCerca={radioCerca}
                   onPlanearDia={planearDia}
                   hoy={hoy}
                   horasDia={capacidad.horasSemana / capacidad.diasSemana}

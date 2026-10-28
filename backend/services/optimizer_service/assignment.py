@@ -224,6 +224,11 @@ def _minutos_grupo(grupo: List[int], actividades: List[Activity], servicios: Dic
     return viaje + sum(get_service_time(actividades[i].servicio, servicios) for i in grupo)
 
 
+def _precisa(actividad: Activity) -> bool:
+    """Tiene GPS o se ubicó por su dirección (no solo por el centro de su municipio)"""
+    return not actividad.ubicacion_municipio
+
+
 def grupos_cercanos(
     indices: List[int],
     actividades: List[Activity],
@@ -243,8 +248,10 @@ def grupos_cercanos(
     if radio_km <= 0 or len(indices) < 2:
         return [[i] for i in indices]
     km = lambda a, b: dist.km(actividades[a].coordinates, actividades[b].coordinates)
+    # Las ubicadas solo por su municipio están todas en el centro: no se sabe si están cerca
     vecinas = {
-        i: [j for j in indices if j != i and claves.get(j) == claves.get(i) and km(i, j) <= radio_km]
+        i: [j for j in indices if j != i and claves.get(j) == claves.get(i) and _precisa(actividades[i])
+            and _precisa(actividades[j]) and km(i, j) <= radio_km]
         for i in indices
     }
     restantes = set(indices)
@@ -315,7 +322,9 @@ def repartir_por_reglas(
     carga = [minutos_ruta(v) for v in range(m)]
 
     def km_entre(a: int, b: int) -> float:
-        return min(dist.km(actividades[i].coordinates, actividades[j].coordinates) for i in nodos[a] for j in nodos[b])
+        return min((dist.km(actividades[i].coordinates, actividades[j].coordinates)
+                    for i in nodos[a] for j in nodos[b] if _precisa(actividades[i]) and _precisa(actividades[j])),
+                   default=math.inf)
 
     def insercion(v: int, n: int) -> Tuple[int, int]:
         """Dónde menos desvía el grupo en la ruta de v, y cuánto queda la carga de v"""

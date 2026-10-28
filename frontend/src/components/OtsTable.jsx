@@ -4,6 +4,7 @@ import {
 } from 'antd';
 import dayjs from 'dayjs';
 import { otTypeSettings } from '../services/otTypes';
+import { columnaCerca } from './AsignadasCerca';
 
 const { Text } = Typography;
 
@@ -23,7 +24,7 @@ const columnFilters = (ots, getter) => [...new Set(ots.map(getter))]
   .map((v) => ({ text: v, value: v }));
 
 const OtsTable = ({
-  ots, nuevas, mapeo, config, title, enPlan = null, enPlanTitulo = 'En el plan',
+  ots, nuevas, mapeo, config, title, enPlan = null, enPlanTitulo = 'En el plan', cercanas = null, radioCerca = 2,
 }) => {
   // Extra columns: everything Metabase sent that is not already shown as a main column
   const extraKeys = useMemo(() => {
@@ -83,6 +84,8 @@ const OtsTable = ({
         </span>
       ),
     }] : []),
+    // With the pending OTs: the assigned ones near each of them
+    ...(cercanas ? [columnaCerca(cercanas, radioCerca, (a) => a)] : []),
     {
       title: 'Fecha visita',
       dataIndex: 'fecha_visita',

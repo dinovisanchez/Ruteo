@@ -70,10 +70,11 @@ async def _buscar(client: httpx.AsyncClient, consulta: str) -> Optional[GPSCoord
     return GPSCoordinates(latitude=lat, longitude=lon) if validate_gps_colombia(lat, lon)[0] else None
 
 
-def _ubicar(actividad: Activity, coords: List[float]) -> None:
+def _ubicar(actividad: Activity, coords: List[float], por_municipio: bool) -> None:
     actividad.coordinates = GPSCoordinates(latitude=coords[0], longitude=coords[1])
     actividad.gps = f"{coords[0]},{coords[1]}"
     actividad.coordenadas_aproximadas = True
+    actividad.ubicacion_municipio = por_municipio
 
 
 async def _refinar(consultas: List[str]) -> None:
@@ -126,7 +127,7 @@ async def geocodificar(actividades: List[Activity]) -> Tuple[int, List[str]]:
         direccion, municipio = _consultas(actividad)
         for consulta in (direccion, municipio):
             if consulta and cache.get(normalizar_texto(consulta)):
-                _ubicar(actividad, cache[normalizar_texto(consulta)])
+                _ubicar(actividad, cache[normalizar_texto(consulta)], por_municipio=consulta != direccion)
                 return consulta == direccion
         return False
 
