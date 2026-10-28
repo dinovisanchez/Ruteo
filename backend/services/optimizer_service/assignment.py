@@ -69,6 +69,7 @@ def _resolver_vrp(
     permitidos: Optional[List[Optional[List[int]]]] = None,
     fijadas: Optional[Set[int]] = None,
     servicio_nodos: Optional[List[int]] = None,
+    ots_nodos: Optional[List[int]] = None,
 ) -> Tuple[List[List[int]], List[int], List[int]]:
     """Reparte las actividades entre vehículos que salen de `inicios`.
 
@@ -77,8 +78,9 @@ def _resolver_vrp(
     que cada vehículo pasa de su meta. `permitidos[i]` limita la actividad i a
     esos vehículos (None = cualquiera) y las `fijadas` se descartan de últimas.
     `servicio_nodos` reemplaza los minutos de servicio de cada actividad (un grupo
-    de OTs cercanas viaja como una sola). Devuelve (rutas, descartadas, minutos
-    por vehículo), con índices sobre `actividades`.
+    de OTs cercanas viaja como una sola) y `ots_nodos` dice cuántas OTs es cada una,
+    para el tope de OTs por ruta. Devuelve (rutas, descartadas, minutos por vehículo),
+    con índices sobre `actividades`.
     """
     n, m = len(actividades), len(inicios)
     if n == 0:
@@ -122,7 +124,10 @@ def _resolver_vrp(
 
     if jornada.capacidad_maxima_actividades:
         def demanda(indice):
-            return 1 if manager.IndexToNode(indice) >= m and manager.IndexToNode(indice) < m + n else 0
+            nodo = manager.IndexToNode(indice)
+            if not m <= nodo < m + n:
+                return 0
+            return ots_nodos[nodo - m] if ots_nodos is not None else 1
         routing.AddDimensionWithVehicleCapacity(
             routing.RegisterUnaryTransitCallback(demanda),
             0,
@@ -225,8 +230,8 @@ def _minutos_grupo(grupo: List[int], actividades: List[Activity], servicios: Dic
 
 
 def _precisa(actividad: Activity) -> bool:
-    """Tiene GPS o se ubicó por su dirección (no solo por el centro de su municipio)"""
-    return not actividad.ubicacion_municipio
+    """Tiene GPS o se ubicó por su dirección exacta (no por el centro de su calle o de su municipio)"""
+    return not actividad.ubicacion_imprecisa
 
 
 def grupos_cercanos(
@@ -248,7 +253,7 @@ def grupos_cercanos(
     if radio_km <= 0 or len(indices) < 2:
         return [[i] for i in indices]
     km = lambda a, b: dist.km(actividades[a].coordinates, actividades[b].coordinates)
-    # Las ubicadas solo por su municipio están todas en el centro: no se sabe si están cerca
+    # Las ubicadas solo por su municipio o su calle están en un centro aproximado: no se sabe si están cerca
     vecinas = {
         i: [j for j in indices if j != i and claves.get(j) == claves.get(i) and _precisa(actividades[i])
             and _precisa(actividades[j]) and km(i, j) <= radio_km]
@@ -292,7 +297,7 @@ def repartir_por_reglas(
     2. Libre: si no, a una cuadrilla que todavía no tiene OTs ese día (la de menor carga).
     3. Si todas tienen OTs y están lejos, a la de menor carga en la semana (`previos` + el día).
 
-    Solo cuentan las cuadrillas donde el grupo cabe en la jornada. Se decide primero lo más
+    Solo cuentan las cuadrillas donde el grupo cabe en la jornada y en el tope de OTs por ruta. Se decide primero lo más
     claro: lo cercano (de lo más cerca a lo más lejos) y luego los grupos más grandes; cada
     decisión cuenta para las siguientes. `fijos` son grupos ya fijados a su única cuadrilla
     permitida. Devuelve por grupo {"vehiculo", "regla", "km", "antes", "despues", "opciones"}
@@ -348,10 +353,13 @@ def repartir_por_reglas(
     pendientes = [n for n in range(len(nodos)) if n not in fijos]
     cerca = {(n, v): min((km_entre(n, r) for r in paradas[v]), default=math.inf) for n in pendientes for v in range(m)}
 
+    tope = jornada.capacidad_maxima_actividades
+
     def opcion(n: int, v: int) -> Tuple[Tuple, int, int]:
         pos, nueva = insercion(v, n)
         km = cerca[(n, v)]
-        if nueva > max_minutos:
+        ots_ruta = sum(len(nodos[r]) for r in paradas[v])
+        if nueva > max_minutos or (tope and ots_ruta + len(nodos[n]) > tope):
             clave: Tuple = (REGLA_NO_CABE, previo[v] + carga[v])
         elif radio > 0 and km <= radio:
             clave = (REGLA_CERCA, km)
@@ -691,6 +699,7 @@ def _asignar_inhouse(
                 permitidos=[[elegidos[n]] if n in elegidos else permitidos_nodo[n] for n in range(len(nodos))],
                 fijadas=fijos_nodo,
                 servicio_nodos=[_minutos_grupo(nodo, acts, servicios, dist) for nodo in nodos],
+                ots_nodos=[len(nodo) for nodo in nodos],
             )
             sueltos = [n for n in descartados if len(nodos[n]) > 1]
             # En el último intento los grupos que no caben se quedan sin asignar enteros
@@ -1363,7 +1372,12 @@ def repartir_lote(request: AssignmentRequest, codigos: List[str], plan_actual: O
         request.jornada.radio_grupo_km, int(jornada_min * FRACCION_GRUPO), servicios, dist,
     )
     nodos = [[k] for k in range(primero)] + grupos
-    permitidos: List[Optional[List[int]]] = [[v] for _, v in anclas] + [cubre[g[0]] for g in grupos]
+    # Un grupo con una OT de 2 personas va a un técnico que tenga con quién salir en pareja en su equipo
+    personas = lambda grupo: max(actividades[k].personas_requeridas for k in grupo)
+    con_pareja = {v for v, t in enumerate(tecnicos) if sum(1 for o in tecnicos if o.base_id == t.base_id) >= 2}
+    permitidos: List[Optional[List[int]]] = [[v] for _, v in anclas] + [
+        [v for v in cubre[g[0]] if personas(g) < 2 or v in con_pareja] for g in grupos
+    ]
     decididos = repartir_por_reglas(
         nodos, actividades, permitidos, set(range(primero)),
         [sedes[t.base_id].coordinates for t in tecnicos],
@@ -1381,8 +1395,11 @@ def repartir_lote(request: AssignmentRequest, codigos: List[str], plan_actual: O
         decidido = decididos.get(n)
         if decidido is None:
             centro = actividades[grupo[0]]
-            motivo = _fuera_de_cobertura(centro, _equipos_que_cubren(centro, request), request) \
-                if tecnicos else "No hay técnicos disponibles"
+            if cubre[grupo[0]] and not permitidos[n]:
+                motivo = f"Necesita {personas(grupo)} personas y en su equipo no hay otro técnico disponible para la pareja"
+            else:
+                motivo = _fuera_de_cobertura(centro, _equipos_que_cubren(centro, request), request) \
+                    if tecnicos else "No hay técnicos disponibles"
             sin_tecnico += [{"codigo": c, "motivo": motivo} for c in codigos_grupo]
             continue
         elegido = tecnicos[decidido["vehiculo"]]
@@ -1393,7 +1410,7 @@ def repartir_lote(request: AssignmentRequest, codigos: List[str], plan_actual: O
             "minutos": round(decidido["despues"] - decidido["antes"]),
             "km_max": round(max((dist.km(actividades[grupo[0]].coordinates, actividades[k].coordinates)
                                  for k in grupo[1:]), default=0), 1),
-            "personas": max(actividades[k].personas_requeridas for k in grupo),
+            "personas": personas(grupo),
             "cabe": decidido["regla"] != REGLA_NO_CABE,
             "regla": decidido["regla"],
             "km_cerca": km_o_nada(decidido["km"]),

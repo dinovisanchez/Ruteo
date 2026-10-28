@@ -153,6 +153,8 @@ async def utilizacion(request: UtilizacionRequest):
     for ruta in (request.plan.rutas if dia_plan else []):
         for tecnico_id in ruta.tecnicos_ids:
             plan[tecnico_id] = ruta
+    # Una OT que el plan le dio a otro (reasignada o editada) ya no le cuenta a quien la tenía en Metabase
+    en_el_plan = {codigo for ruta in plan.values() for codigo in ruta.codigos}
 
     fechas = [request.desde + timedelta(days=i) for i in range((request.hasta - request.desde).days + 1)]
     laborables = {f.isoformat() for f in fechas if f.weekday() < request.dias_semana}
@@ -171,6 +173,9 @@ async def utilizacion(request: UtilizacionRequest):
         if tecnico.id in plan:
             cargas.setdefault(dia_plan, [])
         for fecha, ots in sorted(cargas.items()):
+            if fecha == dia_plan:
+                propias = set(plan[tecnico.id].codigos) if tecnico.id in plan else set()
+                ots = [a for a in ots if a.codigo_bia not in en_el_plan or a.codigo_bia in propias]
             if fecha == dia_plan and tecnico.id in plan:
                 ruta = plan[tecnico.id]
                 # Sus OTs de Metabase que la ruta no trae (sin ubicación): servicio + viaje promedio de la ruta
@@ -188,6 +193,8 @@ async def utilizacion(request: UtilizacionRequest):
                 })
                 ots_por_dia[fecha].update(ruta.codigos)
                 ots_por_dia[fecha].update(a.codigo_bia for a in fuera)
+                continue
+            if not ots:
                 continue
             viaje, km, estimado = minutos_de_viaje(ots, base.coordinates if base else None, dist, jornada.incluir_retorno)
             dias.append({"fecha": fecha, "ots": len(ots), "servicio_min": servicio_de(ots), "viaje_min": viaje,

@@ -31,12 +31,12 @@ test('no cuentan las lejanas, las vencidas, las cerradas ni las ubicadas por mun
     ot('LEJOS', 'asignada', HOY, punto(4.700, -74.080)),
     ot('AYER', 'asignada', '2026-10-27', punto(4.650, -74.080)),
     ot('CERRADA', 'asignada', HOY, punto(4.650, -74.080), { cerrada: true }),
-    ot('MUNICIPIO', 'asignada', HOY, punto(4.650, -74.080), { ubicacion_municipio: true }),
+    ot('MUNICIPIO', 'asignada', HOY, punto(4.650, -74.080), { ubicacion_imprecisa: true }),
     ot('SIN_FECHA', 'asignada', null, punto(4.650, -74.080)),
   ];
   expect(asignadasCerca([pendiente, ...otras], sinCerradas)).toEqual({});
   // Una pendiente ubicada solo por su municipio tampoco tiene nada cerca
-  const municipio = ot('PM', 'pendiente', null, punto(4.650, -74.080), { ubicacion_municipio: true });
+  const municipio = ot('PM', 'pendiente', null, punto(4.650, -74.080), { ubicacion_imprecisa: true });
   expect(asignadasCerca([municipio, ot('A', 'asignada', HOY, punto(4.650, -74.080))], sinCerradas)).toEqual({});
 });
 
@@ -48,7 +48,7 @@ test('una pendiente sin fecha o vencida se compara con las de hoy', () => {
 
 test('ubicacionPrecisa y responsableMetabase', () => {
   expect(ubicacionPrecisa({ coordinates: punto(4, -74) })).toBe(true);
-  expect(ubicacionPrecisa({ coordinates: punto(4, -74), ubicacion_municipio: true })).toBe(false);
+  expect(ubicacionPrecisa({ coordinates: punto(4, -74), ubicacion_imprecisa: true })).toBe(false);
   expect(ubicacionPrecisa({})).toBe(false);
   expect(responsableMetabase({ asignado_a: 'Carlos', contratista_asignado: 'Bia Energy' })).toBe('Carlos');
   expect(responsableMetabase({ asignado_a: 'Pedro', contratista_asignado: 'MONTAJES' })).toBe('Pedro · MONTAJES');

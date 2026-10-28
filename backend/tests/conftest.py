@@ -2,7 +2,7 @@
 import os
 import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -15,6 +15,7 @@ _CARPETA = Path(tempfile.mkdtemp(prefix="ruteo-pruebas-"))
 os.environ.update({
     "ASIGNACION_CONFIG_PATH": str(_CARPETA / "asignacion.json"),
     "GEOCODING_ENABLED": "false",
+    "GOOGLE_GEOCODING_API_KEY": "",
     "OSRM_URL": "",
     "OSRM_URL_RESPALDO": "",
     "METABASE_URL": "http://metabase.prueba",
@@ -28,8 +29,9 @@ from shared.models import Activity, GPSCoordinates, Tecnico  # noqa: E402
 
 
 def dia(desfase: int = 0) -> str:
-    """Hoy más `desfase` días, YYYY-MM-DD: las pruebas no dependen de la fecha en que corren"""
-    return (date.today() + timedelta(days=desfase)).isoformat()
+    """Hoy en Colombia más `desfase` días, YYYY-MM-DD: las pruebas no dependen de la fecha en que corren"""
+    from shared.utils import hoy
+    return (hoy() + timedelta(days=desfase)).isoformat()
 
 
 def ot(codigo: str, lat: float = 4.65, lon: float = -74.08, **campos) -> Activity:

@@ -107,7 +107,7 @@ METABASE_URL=https://metabase.tu-empresa.com
 METABASE_API_KEY=...            # o METABASE_USERNAME / METABASE_PASSWORD
 ```
 
-La pregunta se elige en *Ajustes → Fuente de datos → Cambiar pregunta* (también se puede poner en `METABASE_CARD_ID`); la app no muestra su número. La pregunta necesita una columna con el OR; el código de la OT (`Bia Code`, `OT`…) es recomendable. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Ciudad`; en ese caso la OT se geocodifica con OpenStreetMap y se marca como **ubicación aproximada**: primero se ubica por su municipio (son pocos y se buscan enseguida, así ninguna OT queda sin ubicación) y la dirección exacta se busca en segundo plano para la siguiente extracción. Una OT asignada que aun así no tiene ubicación se queda con su técnico o contratista, aunque no entre en la ruta ni en el mapa. Los nombres de columna en español se reconocen solos; si no, defínelos con `METABASE_COLUMN_MAP`. Para el plan del día, la pregunta debe traer también las OTs asignadas con *Situación*, *Fecha de la visita*, *Electricistas asignados* y *Contratista asignado*. Esta consulta SQL sobre `operations.visitas_general` sirve:
+La pregunta se elige en *Ajustes → Fuente de datos → Cambiar pregunta* (también se puede poner en `METABASE_CARD_ID`); la app no muestra su número. La pregunta necesita una columna con el OR; el código de la OT (`Bia Code`, `OT`…) es recomendable. La ubicación puede venir como `GPS` ("lat, lon"), como `Latitud`/`Longitud`, o solo como `Dirección` + `Ciudad`; en ese caso la OT se geocodifica (ver **Ubicaciones** más abajo) y se marca como **ubicación aproximada**: primero se ubica por su municipio (son pocos y se buscan enseguida, así ninguna OT queda sin ubicación) y la dirección exacta se busca en segundo plano para la siguiente extracción. Una OT asignada que aun así no tiene ubicación se queda con su técnico o contratista, aunque no entre en la ruta ni en el mapa. Los nombres de columna en español se reconocen solos; si no, defínelos con `METABASE_COLUMN_MAP`. Para el plan del día, la pregunta debe traer también las OTs asignadas con *Situación*, *Fecha de la visita*, *Electricistas asignados* y *Contratista asignado*. Esta consulta SQL sobre `operations.visitas_general` sirve:
 
 ```sql
 SELECT
@@ -154,6 +154,24 @@ ORDER BY fecha_visita NULLS LAST, card_id;
 ```
 
 La misma consulta está en [docs/pregunta_metabase.sql](docs/pregunta_metabase.sql), para copiarla entera: en el Mac, `pbcopy < docs/pregunta_metabase.sql` la deja en el portapapeles.
+
+**Estados y fechas.** La *Situación* se lee por su valor completo: «Pendiente por asignar», «Asignada», «Reasignada», «Cerrada», «Cierre exitoso»… Si la pregunta no trae *Situación*, vale *Estado app* de Olibia (`PENDING_ASSIGNMENT`, `ASSIGNED`, `REASSIGNED`, `COMPLETED`…). Las canceladas, anuladas o rechazadas no se cargan, y un valor que Ruteo no conoce (por ejemplo «No asignada») se toma como por asignar, para que se vea, y el panel lo avisa con el valor y cuántas filas lo traen. Las fechas con hora que Metabase manda con zona (`…-05:00`) o en UTC (`…Z`) se pasan a la hora de Colombia, así una visita de las 10 p. m. no cae al día siguiente; medianoche cuenta como fecha sin hora. En un Excel o CSV las fechas en texto van con el día primero (`03/11/2026` es el 3 de noviembre). «Hoy» es hoy en Colombia (`ZONA_HORARIA`), aunque el servidor esté en otra zona.
+
+**Ubicaciones.** Con coordenadas en la pregunta, la ruta, los km y la columna *Asignadas cerca* son exactos; con solo la dirección dependen de encontrarla en el mapa. Por eso:
+
+- **Busca si su base tiene coordenadas.** Desde la carpeta `backend`, con el número de la base (el `database` en la URL de una pregunta): `.venv/bin/python -m scripts.explorar_metabase --base <número> --buscar` lista las columnas con *latitud*, *longitud*, *gps* o *coordenadas*. Con acceso de SQL, esta consulta hace lo mismo:
+
+  ```sql
+  SELECT table_schema, table_name, column_name
+  FROM information_schema.columns
+  WHERE column_name ~* '(lat|lon|lng|coord|gps|geo|ubicaci)'
+    AND table_schema NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY table_schema, table_name, column_name;
+  ```
+
+  Si una tabla (por ejemplo la del cliente o la de la frontera) las tiene, únela en la pregunta y agrega `… AS "Latitud"` y `… AS "Longitud"` (el comentario al inicio de `docs/pregunta_metabase.sql` tiene el molde). Ruteo las usa solas y deja de geocodificar esas OTs.
+- **Sin coordenadas, Ruteo busca la dirección.** Antes la escribe como la entiende el mapa: «Cl. 58 #10-32 Apto 3» se busca como «Calle 58 10-32» (tipos de vía como CL, KR, AK, DG o TV; sin «#», «No.», apartamento ni barrio). Si el mapa solo encuentra la calle o el municipio, la OT queda como **ubicación aproximada** y no cuenta como cerca de nada (ni en el plan ni en *Asignadas cerca*), porque su punto es un centro. Una dirección que no se encontró se vuelve a buscar a los 7 días.
+- **Nominatim o Google.** Por defecto se usa Nominatim (OpenStreetMap): gratis, pero pide máximo una consulta por segundo (Ruteo la respeta entre todas sus búsquedas) y conoce pocas direcciones de Colombia. Con `GOOGLE_GEOCODING_API_KEY` en `backend/.env` (Google Cloud → *Geocoding API*) se usa Google, que ubica muchas más direcciones a nivel de casa. Google cobra por uso después de una cuota gratis mensual; como Ruteo guarda cada dirección encontrada en `backend/data/geocache.json`, solo paga la primera vez que ve una dirección. Revisa el precio vigente antes de activarlo.
 
 **Quién creó la OT.** `Creado por` y `Fecha de creación` salen en la lista (debajo de cada OT), en la tabla completa, en el CSV y en la búsqueda. En `operations.visitas_general` el creador es `wo_generate_by` (no hay `created_by`) y la fecha, `created_at`. La app reconoce también `Creada por`, `Creador` y `Created by`.
 

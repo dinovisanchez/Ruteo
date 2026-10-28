@@ -9,8 +9,8 @@ export const kmEntre = (a, b) => {
   return 2 * 6371 * Math.asin(Math.sqrt(h));
 };
 
-// Located by GPS or by its address: the ones located only by their municipality are all at its center
-export const ubicacionPrecisa = (a) => Boolean(a?.coordinates) && !a.ubicacion_municipio;
+// Located by GPS or by its exact address: the ones located only by their street or municipality are at its center
+export const ubicacionPrecisa = (a) => Boolean(a?.coordinates) && !a.ubicacion_imprecisa;
 
 // Who has an assigned OT, as Metabase says: the electricians and, if it is not Bia, the contractor
 export const responsableMetabase = (a) => {

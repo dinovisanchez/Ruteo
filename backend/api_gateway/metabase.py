@@ -6,8 +6,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import itertools
 import json
 import re
+from collections import Counter
+from datetime import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
 from dateutil import parser as dateutil_parser
@@ -214,45 +217,77 @@ def _coordenadas_fila(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Optional[G
     return None
 
 
-def _situacion(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
-    """'pendiente' o 'asignada', según la columna Situación o el estado de la app de campo"""
-    if "situacion" in mapeo:
-        valor = normalizar_texto(_texto(fila.get(mapeo["situacion"])))
-        if "pendiente" in valor:
-            return "pendiente"
-        # Las cerradas también cuentan como asignadas: ocuparon tiempo de su técnico ese día
-        if "asignad" in valor or "cerrad" in valor:
-            return "asignada"
-    if "estado_app" in mapeo:
-        valor = normalizar_texto(_texto(fila.get(mapeo["estado_app"])))
-        return "pendiente" if valor in ("", "pending_assignment", "pending assignment") else "asignada"
-    return "pendiente"
+# Valores de «Situación» (los de la pregunta recomendada y sus variantes) y de «Estado app» de Olibia.
+# Se comparan completos: «No asignada» no es «asignada», «Cancelada» no es «pendiente».
+SITUACIONES = {
+    "pendiente por asignar": "pendiente", "por asignar": "pendiente", "pendiente": "pendiente", "sin asignar": "pendiente",
+    "asignada": "asignada", "asignado": "asignada", "reasignada": "asignada", "reasignado": "asignada",
+    "en ejecucion": "asignada", "lista para ejecutar": "asignada", "programada": "asignada",
+    "cerrada": "cerrada", "cerrado": "cerrada", "completada": "cerrada", "ejecutada": "cerrada",
+    "cierre exitoso": "cerrada", "cierre fallido": "cerrada",
+    "cancelada": "descartada", "cancelado": "descartada", "anulada": "descartada", "rechazada": "descartada",
+}
+ESTADOS_APP = {
+    "pending assignment": "pendiente",
+    "assigned": "asignada", "reassigned": "asignada", "accepted": "asignada", "scheduled": "asignada",
+    "in progress": "asignada", "on the way": "asignada", "started": "asignada",
+    "completed": "cerrada", "finished": "cerrada", "closed": "cerrada", "done": "cerrada", "failed": "cerrada",
+    "cancelled": "descartada", "canceled": "descartada", "rejected": "descartada", "deleted": "descartada",
+}
 
 
-def _cerrada(fila: Dict[str, Any], mapeo: Dict[str, str]) -> bool:
-    """La visita ya se hizo: la columna Situación dice «Cerrada»"""
-    return "situacion" in mapeo and "cerrad" in normalizar_texto(_texto(fila.get(mapeo["situacion"])))
+def _clave_estado(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", normalizar_texto(texto)).strip()
 
 
-def _hora(valor: Any) -> Optional[str]:
-    """HH:MM de una fecha con hora (ISO o texto); None si no trae hora o es medianoche"""
-    coincidencia = re.search(r"[T ](\d{1,2}):(\d{2})", _texto(valor))
-    if not coincidencia or (coincidencia.group(1) in ("0", "00") and coincidencia.group(2) == "00"):
-        return None
-    return f"{int(coincidencia.group(1)):02d}:{coincidencia.group(2)}"
+def _estado(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Tuple[str, Optional[str]]:
+    """(estado, valor que no se reconoció) según «Situación» o, si no la trae, «Estado app».
+
+    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada) o "descartada"
+    (cancelada o rechazada: no entra). Un archivo sin columnas de estado trae OTs por asignar; un
+    valor que no se reconoce se toma como por asignar, para que se vea, y se avisa.
+    """
+    desconocido = None
+    for campo, valores in (("situacion", SITUACIONES), ("estado_app", ESTADOS_APP)):
+        if campo not in mapeo:
+            continue
+        texto = _texto(fila.get(mapeo[campo]))
+        if _clave_estado(texto) in valores:
+            return valores[_clave_estado(texto)], None
+        desconocido = desconocido or (texto or None)
+    return "pendiente", desconocido
+
+
+def _momento(valor: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(fecha YYYY-MM-DD, hora HH:MM) en la hora de Colombia de lo que mande Metabase o un archivo.
+
+    Con desfase o en UTC (…Z) se pasa a la hora de Colombia; sin desfase ya es hora local. Medianoche
+    es una fecha sin hora y se toma tal cual. En texto, el día va primero (29/10/2026). Lo que no es
+    una fecha (por ejemplo «Semana 3») da (None, None).
+    """
+    texto = _texto(valor)
+    if not texto:
+        return None, None
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}", texto):
+            momento = dateutil_parser.isoparse(texto)
+        else:
+            momento = dateutil_parser.parse(texto, dayfirst=True)
+    except (ValueError, OverflowError):
+        return None, None
+    if momento.time() == time(0, 0):
+        return momento.date().isoformat(), None
+    if momento.tzinfo is not None:
+        momento = momento.astimezone(ZoneInfo(settings.ZONA_HORARIA))
+    return momento.date().isoformat(), momento.strftime("%H:%M")
 
 
 def _fecha(valor: Any) -> Optional[str]:
-    """Fecha YYYY-MM-DD a partir de lo que mande Metabase (ISO o texto con formato)"""
-    texto = _texto(valor)
-    if not texto:
-        return None
-    if re.match(r"^\d{4}-\d{2}-\d{2}", texto):
-        return texto[:10]
-    try:
-        return dateutil_parser.parse(texto, fuzzy=True).date().isoformat()
-    except (ValueError, OverflowError):
-        return None
+    return _momento(valor)[0]
+
+
+def _hora(valor: Any) -> Optional[str]:
+    return _momento(valor)[1]
 
 
 def _servicio(fila: Dict[str, Any], mapeo: Dict[str, str]) -> str:
@@ -293,13 +328,27 @@ def filas_a_actividades(
         avisos.append(
             "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
         )
-    codigos, avisos_filas = _codigos_por_fila(filas, mapeo)
+    estados = {numero: _estado(fila, mapeo) for numero, fila in enumerate(filas, start=1)}
+    descartadas = sum(1 for estado, _ in estados.values() if estado == "descartada")
+    desconocidos = Counter(valor for _, valor in estados.values() if valor)
+    if descartadas:
+        avisos.append(f"OTs canceladas o rechazadas que no se cargan: {descartadas}")
+    if desconocidos:
+        valores = ", ".join(f"«{v}» ({n})" for v, n in desconocidos.most_common(4))
+        avisos.append(f"Estados que Ruteo no conoce, tomados como por asignar: {valores}. Revisa la pregunta")
+    codigos, avisos_filas = _codigos_por_fila(filas, mapeo, estados)
     avisos.extend(avisos_filas)
     actividades: List[Activity] = []
+    fechas_raras = 0
     for numero, fila in enumerate(filas, start=1):
         codigo = codigos.get(numero)
         if not codigo:
             continue
+        estado = estados[numero][0]
+        valor_fecha = fila.get(mapeo["fecha_visita"]) if "fecha_visita" in mapeo else None
+        fecha_visita, hora_visita = _momento(valor_fecha)
+        if _texto(valor_fecha) and not fecha_visita:
+            fechas_raras += 1
         coords = _coordenadas_fila(fila, mapeo)
         actividades.append(Activity(
             codigo_bia=codigo,
@@ -312,10 +361,10 @@ def filas_a_actividades(
             or_operador=_texto(fila.get(mapeo["or_operador"])) or "Sin OR",
             coordinates=coords,
             extras=dict(fila),
-            situacion=_situacion(fila, mapeo),
-            cerrada=_cerrada(fila, mapeo),
-            fecha_visita=_fecha(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
-            hora_visita=_hora(fila.get(mapeo["fecha_visita"])) if "fecha_visita" in mapeo else None,
+            situacion="pendiente" if estado == "pendiente" else "asignada",
+            cerrada=estado == "cerrada",
+            fecha_visita=fecha_visita,
+            hora_visita=hora_visita,
             asignado_a=(_texto(fila.get(mapeo["asignado_a"])) or None) if "asignado_a" in mapeo else None,
             electricista_id=(_texto(fila.get(mapeo["electricista_id"])) or None) if "electricista_id" in mapeo else None,
             contratista_asignado=(
@@ -324,6 +373,8 @@ def filas_a_actividades(
             creado_por=(_texto(fila.get(mapeo["creado_por"])) or None) if "creado_por" in mapeo else None,
             fecha_creacion=_fecha(fila.get(mapeo["fecha_creacion"])) if "fecha_creacion" in mapeo else None,
         ))
+    if fechas_raras:
+        avisos.append(f"Fechas de visita que no se entendieron (quedaron sin fecha): {fechas_raras}")
     if len(actividades) != len(filas):
         avisos.insert(0, f"Metabase trajo {len(filas)} filas y quedaron {len(actividades)} OTs")
     return actividades, mapeo, avisos
@@ -334,29 +385,33 @@ def _ejemplos(codigos: List[str]) -> str:
     return ", ".join(distintos[:3]) + ("…" if len(distintos) > 3 else "")
 
 
-def _codigos_por_fila(filas: List[Dict[str, Any]], mapeo: Dict[str, str]) -> Tuple[Dict[int, str], List[str]]:
+def _codigos_por_fila(
+    filas: List[Dict[str, Any]], mapeo: Dict[str, str], estados: Dict[int, Tuple[str, Optional[str]]],
+) -> Tuple[Dict[int, str], List[str]]:
     """Número de fila → código con el que entra al plan; las filas que no entran no aparecen.
 
     Cada fila es una visita y una OT (mismo código y misma orden) puede traer varias: la vigente es
     la que sigue por asignar o, si ninguna, la más reciente, y usa el código tal cual. Las visitas
     anteriores ya asignadas o cerradas entran aparte con su fecha (ocuparon a su técnico ese día);
     las anteriores que dicen «por asignar» quedaron atrás con la nueva visita y no cuentan. Dos OTs
-    distintas con el mismo código se distinguen con el número de la orden.
+    distintas con el mismo código se distinguen con el número de la orden. Las canceladas no entran.
     """
     avisos: List[str] = []
     ots: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for numero, fila in enumerate(filas, start=1):
+        if estados[numero][0] == "descartada":
+            continue
         codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
         if not codigo:
             avisos.append(f"Fila {numero}: sin código de OT; se omite")
             continue
         orden = _texto(fila.get(mapeo["orden_trabajo"])) if "orden_trabajo" in mapeo else ""
-        valor = fila.get(mapeo["fecha_visita"]) if "fecha_visita" in mapeo else None
+        fecha, hora = _momento(fila.get(mapeo["fecha_visita"]) if "fecha_visita" in mapeo else None)
         ots.setdefault((codigo, orden), []).append({
             "numero": numero,
-            "fecha": _fecha(valor) or "",
-            "hora": _hora(valor) or "",
-            "pendiente": _situacion(fila, mapeo) == "pendiente",
+            "fecha": fecha or "",
+            "hora": hora or "",
+            "pendiente": estados[numero][0] == "pendiente",
         })
 
     repetidas = 0

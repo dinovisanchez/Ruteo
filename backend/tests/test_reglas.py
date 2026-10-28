@@ -126,7 +126,7 @@ def test_si_el_grupo_no_cabe_se_separa_y_se_reintenta(monkeypatch):
 
 
 def test_ubicadas_solo_por_municipio_no_cuentan_como_cerca():
-    centro = dict(lat=4.6097, lon=-74.0817, ubicacion_municipio=True)
+    centro = dict(lat=4.6097, lon=-74.0817, ubicacion_imprecisa=True)
     actividades = [ot("M0", **centro), ot("M1", **centro), ot("D0", 4.640, -74.065)]
     grupos = motor.grupos_cercanos([0, 1, 2], actividades, {0: 1, 1: 1, 2: 1}, 2.0, 400, {},
                                    motor.Distancias(jornada()))

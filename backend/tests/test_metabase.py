@@ -1,4 +1,6 @@
 """Filas de la pregunta de Metabase → OTs: columnas, situación, visitas de una misma OT"""
+import pytest
+
 from api_gateway import metabase
 from conftest import dia
 
@@ -85,3 +87,71 @@ def test_sin_columna_de_or_falla_con_mensaje():
         assert "OR" in str(e)
     else:
         raise AssertionError("debió fallar")
+
+
+@pytest.mark.parametrize("valor, esperado", [
+    ("2026-10-29T12:00:00-05:00", ("2026-10-29", "12:00")),
+    ("2026-10-29T17:00:00Z", ("2026-10-29", "12:00")),           # UTC → hora de Colombia
+    ("2026-10-30T03:00:00Z", ("2026-10-29", "22:00")),           # en UTC ya es otro día
+    ("2026-10-29T09:30:00.000-0500", ("2026-10-29", "09:30")),
+    ("2026-10-29 09:30:00", ("2026-10-29", "09:30")),           # sin desfase: ya es hora local
+    ("2026-10-29T00:00:00Z", ("2026-10-29", None)),               # medianoche es una fecha sin hora
+    ("2026-10-29", ("2026-10-29", None)),
+    ("03/11/2026", ("2026-11-03", None)),                         # en texto el día va primero
+    ("13/11/2026 14:30", ("2026-11-13", "14:30")),
+    ("Semana 3", (None, None)),
+    ("", (None, None)),
+])
+def test_fechas_y_horas_en_hora_de_colombia(valor, esperado):
+    assert metabase._momento(valor) == esperado
+
+
+def test_una_fecha_que_no_se_entiende_se_avisa():
+    _, avisos = leer([fila("CO1", 1, "Semana 3", P)])
+    assert any("no se entendieron" in a for a in avisos)
+
+
+@pytest.mark.parametrize("situacion, esperado", [
+    ("Pendiente por asignar", ("pendiente", False)),
+    ("Asignada", ("asignada", False)),
+    ("REASIGNADA", ("asignada", False)),
+    ("Cerrada", ("asignada", True)),
+    ("Cierre Fallido", ("asignada", True)),
+    # Antes «No asignada» contaba como asignada y «Cancelada» como pendiente
+    ("No asignada", ("pendiente", False)),
+    ("Desasignada", ("pendiente", False)),
+])
+def test_situacion_por_valor_exacto(situacion, esperado):
+    ots, _ = leer([fila("CO1", 1, dia(1), situacion)])
+    assert (ots["CO1"].situacion, ots["CO1"].cerrada) == esperado
+
+
+@pytest.mark.parametrize("estado_app, esperado", [
+    ("PENDING_ASSIGNMENT", ("pendiente", False)),
+    ("ASSIGNED", ("asignada", False)),
+    ("REASSIGNED", ("asignada", False)),
+    ("COMPLETED", ("asignada", True)),
+    ("", ("pendiente", False)),
+])
+def test_sin_situacion_manda_el_estado_app(estado_app, esperado):
+    datos = {k: v for k, v in fila("CO1", 1, dia(1), P).items() if k != "Situación"}
+    ots, _ = leer([{**datos, "Estado app": estado_app}])
+    assert (ots["CO1"].situacion, ots["CO1"].cerrada) == esperado
+
+
+def test_canceladas_no_entran_y_lo_desconocido_se_avisa():
+    ots, avisos = leer([fila("CO1", 1, dia(1), "Cancelada"), fila("CO2", 2, dia(1), "No asignada"),
+                        fila("CO3", 3, dia(1), "No asignada"), fila("CO4", 4, dia(1), P)])
+    assert sorted(ots) == ["CO2", "CO3", "CO4"]
+    assert "OTs canceladas o rechazadas que no se cargan: 1" in avisos
+    assert any("«No asignada» (2)" in a and "por asignar" in a for a in avisos)
+
+
+def test_una_visita_cancelada_no_le_quita_el_codigo_a_la_vigente():
+    ots, _ = leer([fila("CO1", 1, dia(3), "Cancelada"), fila("CO1", 1, dia(1), P)])
+    assert list(ots) == ["CO1"] and ots["CO1"].fecha_visita == dia(1)
+
+
+def test_un_archivo_sin_columnas_de_estado_trae_pendientes():
+    actividades, _, avisos = metabase.filas_a_actividades([{"Bia Code": "X1", "OR": "Enel", "Dirección": "Calle 1"}], {})
+    assert actividades[0].situacion == "pendiente" and avisos == []

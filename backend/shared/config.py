@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     MIN_LONGITUDE: float = -81.8
     MAX_LONGITUDE: float = -66.9
 
+    # Zona horaria de las OTs: «hoy» y las horas de visita de Metabase se leen en esta zona
+    ZONA_HORARIA: str = "America/Bogota"
+
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
@@ -54,9 +57,11 @@ class Settings(BaseSettings):
     # Técnicos y contratistas por OR que se editan desde la app
     ASIGNACION_CONFIG_PATH: str = ""  # Por defecto backend/data/asignacion.json
 
-    # Geocodificación (Nominatim) para OTs que llegan sin GPS
+    # Geocodificación para OTs que llegan sin GPS: Nominatim (gratis, 1 consulta por segundo) o, con una
+    # llave de la API Geocoding de Google, Google (entiende mejor las direcciones de Colombia; cobra por uso)
     GEOCODING_ENABLED: bool = True
     GEOCODING_MAX_POR_CONSULTA: int = 30
+    GOOGLE_GEOCODING_API_KEY: str = ""
 
     # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
     OSRM_URL: str = "https://router.project-osrm.org"

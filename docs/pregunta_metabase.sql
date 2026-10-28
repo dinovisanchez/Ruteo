@@ -1,3 +1,8 @@
+-- Pregunta de Metabase para Ruteo. Copiarla entera: pbcopy < docs/pregunta_metabase.sql
+-- Si otra tabla trae las coordenadas (búscalas con: python -m scripts.explorar_metabase --base <número> --buscar),
+-- únela y agrega dos columnas; por ejemplo, si están en una tabla de fronteras por código Bia:
+--   LEFT JOIN <esquema>.<tabla_con_coordenadas> u ON u.<codigo> = internal_bia_code
+--   y en el SELECT:  u.<latitud> AS "Latitud", u.<longitud> AS "Longitud",
 SELECT
   COALESCE(NULLIF(TRIM(internal_bia_code), ''), 'OT-' || CAST(card_id AS VARCHAR)) AS "Bia Code",
   card_id AS "Orden de trabajo",

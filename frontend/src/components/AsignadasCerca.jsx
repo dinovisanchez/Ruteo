@@ -24,8 +24,8 @@ export const AsignadasCerca = ({ actividad, cercanas, radio }) => {
     if (!actividad.coordinates) return <span className="muted-text">Sin ubicación</span>;
     if (!ubicacionPrecisa(actividad)) {
       return (
-        <Tooltip title="No se encontró su dirección: su punto es el centro del municipio, así que no se sabe qué tiene cerca">
-          <span className="muted-text">Ubicada solo por su municipio</span>
+        <Tooltip title="No se encontró su dirección exacta: su punto es el centro de su calle o de su municipio, así que no se sabe qué tiene cerca">
+          <span className="muted-text">Ubicación aproximada</span>
         </Tooltip>
       );
     }

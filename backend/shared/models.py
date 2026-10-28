@@ -30,8 +30,8 @@ class Activity(BaseModel):
     coordinates: Optional[GPSCoordinates] = None
     # True cuando las coordenadas salen de geocodificar la dirección y no de un GPS
     coordenadas_aproximadas: bool = False
-    # Solo se encontró su municipio: su punto es el centro del municipio y no sirve para saber qué tiene cerca
-    ubicacion_municipio: bool = False
+    # Solo se encontró su municipio o su calle: el punto es un centro aproximado y no sirve para saber qué tiene cerca
+    ubicacion_imprecisa: bool = False
     # Personas que necesita la OT según su tipo (las cuadrillas de 2 atienden las que piden 2)
     personas_requeridas: int = Field(default=1, ge=1)
     # Todas las columnas de la fila de origen (Metabase), tal como llegaron

@@ -29,6 +29,7 @@ const entorno = {
   OSRM_URL_RESPALDO: '',
   OSRM_PAUSA_SEGUNDOS: '0',
   GEOCODING_ENABLED: 'false',
+  GOOGLE_GEOCODING_API_KEY: '',
 };
 // Los registros de cada servidor quedan en salida/<nombre>.log
 const servidor = (nombre, comando, carpeta, url) => ({

@@ -4,7 +4,6 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from collections import Counter
-from datetime import date
 from functools import lru_cache
 from pathlib import Path
 import csv
@@ -33,7 +32,7 @@ from shared.models import (
     Tecnico,
     ZonaTransito,
 )
-from shared.utils import setup_logging
+from shared.utils import hoy as hoy_en_colombia, setup_logging
 from . import metabase
 from .archivo import ArchivoError, leer_filas
 from .geocoding import geocodificar
@@ -323,7 +322,7 @@ def plan_del_dia(
     parejas: List[List[str]] = []
     sin_registrar: Dict[str, int] = {}
     otros_dias = sin_fecha = pendientes_otros_dias = 0
-    hoy = date.today().isoformat()
+    hoy = hoy_en_colombia().isoformat()
 
     for actividad in actividades:
         codigo = actividad.codigo_bia
@@ -609,7 +608,7 @@ async def _pedido_del_dia(
     for actividad in actividades:
         actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
 
-    dia = request.dia or date.today().isoformat()
+    dia = request.dia or hoy_en_colombia().isoformat()
     actividades, fijas, externas, notas, parejas, metricas_dia = plan_del_dia(
         actividades, dia, request.fijas, config.tecnicos, tecnicos, sedes, aprender_ids(actividades, config)
     )

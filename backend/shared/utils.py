@@ -1,8 +1,9 @@
 """Utility functions shared by the gateway and the optimizer"""
 import logging
 import math
-from datetime import time
+from datetime import date, datetime, time
 from typing import Optional, Tuple, Dict
+from zoneinfo import ZoneInfo
 
 from .models import GPSCoordinates
 
@@ -54,6 +55,13 @@ def setup_logging(service_name: str, log_level: str = "INFO") -> logging.Logger:
     )
     logger = logging.getLogger(service_name)
     return logger
+
+
+def hoy() -> date:
+    """Hoy en Colombia (ZONA_HORARIA), aunque el servidor tenga otra zona"""
+    from .config import settings
+
+    return datetime.now(ZoneInfo(settings.ZONA_HORARIA)).date()
 
 
 def haversine_distance(coord1: GPSCoordinates, coord2: GPSCoordinates) -> float:

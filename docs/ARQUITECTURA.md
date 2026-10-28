@@ -61,8 +61,8 @@ flowchart LR
 |---|---|
 | `main.py` | Crea la app, CORS, el chequeo de host (solo `localhost`/`127.0.0.1`), `/api/health` y monta los routers bajo `/api` |
 | `assignment_routes.py` | Endpoints del plan: Metabase, archivo (`/upload`), catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
-| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. |
-| `geocoding.py` | Ubica las OTs sin GPS con Nominatim: municipio enseguida, dirección en segundo plano, con caché en `data/geocache.json`. Las que solo tienen su municipio llevan `ubicacion_municipio` y no cuentan como cerca de nada |
+| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. `_estado` lee *Situación* / *Estado app* por valor exacto (`SITUACIONES`, `ESTADOS_APP`) y `_momento` pasa fechas con zona a la hora de Colombia |
+| `geocoding.py` | Ubica las OTs sin GPS con Nominatim o, con `GOOGLE_GEOCODING_API_KEY`, con Google: municipio enseguida, dirección (normalizada con `normalizar_direccion`) en segundo plano, con caché en `data/geocache.json` y una consulta por segundo para Nominatim. Las que solo dan la calle o el municipio llevan `ubicacion_imprecisa` y no cuentan como cerca de nada; las no encontradas se reintentan a los 7 días |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
 | `archivo.py` | Lee un Excel (`.xlsx`) o CSV (coma o punto y coma, UTF-8 o latin-1) como filas de la pregunta; `/upload` las pasa por `filas_a_actividades` igual que Metabase |
@@ -96,7 +96,7 @@ Cómo decide `asignar`:
 | `operadores.py` | Catálogo de OR (Enel, Air-e, Afinia…) y sus nombres alternativos |
 | `catalogo.py` | Bases Bia y sedes de contratistas desde `data/contratistas.csv` o la hoja publicada |
 | `config.py` | Variables de `backend/.env` |
-| `utils.py` | Distancia en línea recta, horas y registros |
+| `utils.py` | Distancia en línea recta, «hoy» en Colombia (`hoy()`, `ZONA_HORARIA`), horas y registros |
 
 ### Datos y configuración
 
