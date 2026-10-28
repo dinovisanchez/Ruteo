@@ -15,8 +15,6 @@ flowchart LR
   subgraph Backend["Backend FastAPI"]
     GW["API Gateway :8000<br/>/api/..."]
     OPT["Optimizer :8003<br/>/assign · /lote"]
-    DATA["Data service :8001<br/>/upload"]
-    DIST["Distance service :8002<br/>(heredado)"]
     Shared[("shared/<br/>modelos, distancias,<br/>zonas, operadores")]
     Files[("backend/data/<br/>zonas, contratistas,<br/>técnicos, asignacion.json")]
   end
@@ -30,7 +28,6 @@ flowchart LR
   Panel --> GW
   Vistas --> GW
   GW --> OPT
-  GW --> DATA
   GW --> Metabase
   GW --> Nominatim
   GW --> OSRM
@@ -42,7 +39,7 @@ flowchart LR
 ```
 
 - El **frontend** solo habla con el **API Gateway** (`http://localhost:8000/api`, o `REACT_APP_API_URL`). La única excepción es OSRM: si el backend no llega, el navegador pide directo los tiempos y el trazado por carretera (`services/osrm.js`).
-- El **API Gateway** lee Metabase, ubica las OTs, arma el plan del día y le pide al **Optimizer** que decida. También calcula la utilización (UTR) y traza las rutas.
+- El **API Gateway** lee Metabase (o un Excel/CSV con las mismas columnas), ubica las OTs, arma el plan del día y le pide al **Optimizer** que decida. También calcula la utilización (UTR) y traza las rutas.
 - El **Optimizer** es el motor: reparte las OTs entre cuadrillas de técnicos (OR-Tools) y contratistas.
 - **Olibia** todavía no está conectada: la asignación se hace a mano en Olibia y vuelve a Ruteo a través de Metabase.
 
@@ -50,13 +47,11 @@ flowchart LR
 
 `./iniciar.sh` en la raíz:
 
-1. Crea `backend/.venv` e instala `requirements.txt` (solo la primera vez).
-2. Crea `backend/.env` desde `.env.example` si no existe.
-3. Levanta los 4 servicios con uvicorn: data `8001`, distance `8002`, optimizer `8003` y gateway `8000` (registros en `logs/`).
+1. Crea `backend/.venv` y lo pone al día con `requirements.txt` (versiones fijas que funcionan con Python 3.9 a 3.13).
+2. Crea `backend/.env` desde `backend/.env.example` si no existe.
+3. Levanta 2 servicios con uvicorn: optimizer `8003` y gateway `8000` (registros en `logs/`). Antes detiene los de una versión anterior, incluidos los servicios de datos y distancias que ya no existen.
 4. Espera a que el gateway responda en `/api/health` y avisa si Metabase no está configurado.
-5. Arranca el frontend con `npm start` (puerto 3000).
-
-`docker-compose.yml` levanta lo mismo en contenedores, más Redis, que solo usa el distance service heredado como caché.
+5. Instala los paquetes del frontend si cambió `package-lock.json` y arranca `npm start` (puerto 3000).
 
 ## Backend
 
@@ -64,13 +59,13 @@ flowchart LR
 
 | Módulo | Qué hace |
 |---|---|
-| `main.py` | Crea la app, CORS, y monta los routers bajo `/api` |
-| `assignment_routes.py` | Endpoints del plan: Metabase, catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
+| `main.py` | Crea la app, CORS, el chequeo de host (solo `localhost`/`127.0.0.1`), `/api/health` y monta los routers bajo `/api` |
+| `assignment_routes.py` | Endpoints del plan: Metabase, archivo (`/upload`), catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
 | `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. |
 | `geocoding.py` | Ubica las OTs sin GPS con Nominatim: municipio enseguida, dirección en segundo plano, con caché en `data/geocache.json`. Las que solo tienen su municipio llevan `ubicacion_municipio` y no cuentan como cerca de nada |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
-| `routes.py`, `orchestrator.py` | Endpoints heredados del optimizador original (`/upload`, `/optimize`…); de ellos la pantalla usa solo `/upload` |
+| `archivo.py` | Lee un Excel (`.xlsx`) o CSV (coma o punto y coma, UTF-8 o latin-1) como filas de la pregunta; `/upload` las pasa por `filas_a_actividades` igual que Metabase |
 
 ### Optimizer (`backend/services/optimizer_service`, puerto 8003)
 
@@ -91,11 +86,6 @@ Cómo decide `asignar`:
 8. Lo que no cabe en los técnicos va al **contratista más cercano de su OR** (`_asignar_contratistas`).
 9. Devuelve rutas, una **decisión por OT** con su motivo, y métricas.
 
-### Data service (puerto 8001) y Distance service (puerto 8002)
-
-- **Data service**: `POST /upload` lee un Excel o CSV de OTs (botón «o subir un Excel/CSV» en Ajustes).
-- **Distance service**: viene del optimizador original. El plan actual no lo llama: las distancias se calculan dentro del gateway y del optimizer con `shared/distancias.py`.
-
 ### Código compartido (`backend/shared`)
 
 | Archivo | Qué contiene |
@@ -106,6 +96,7 @@ Cómo decide `asignar`:
 | `operadores.py` | Catálogo de OR (Enel, Air-e, Afinia…) y sus nombres alternativos |
 | `catalogo.py` | Bases Bia y sedes de contratistas desde `data/contratistas.csv` o la hoja publicada |
 | `config.py` | Variables de `backend/.env` |
+| `utils.py` | Distancia en línea recta, horas y registros |
 
 ### Datos y configuración
 
@@ -137,6 +128,7 @@ Cómo decide `asignar`:
 | `services/osrm.js` | OSRM desde el navegador, de respaldo |
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
 | `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
+| `services/plan.js` | Reglas del día que no dependen de la pantalla: qué OTs entran en un día, grupos de pendientes, cuándo el plan quedó viejo, filtros por persona |
 
 ## Endpoints y quién los usa
 
@@ -144,7 +136,7 @@ Cómo decide `asignar`:
 |---|---|---|---|
 | `GET /api/metabase/estado` | Si Metabase está configurado y la pregunta guardada | Panel | — |
 | `GET /api/metabase/ots` | Trae las OTs de la pregunta y ubica las que no tienen GPS | Panel (Extraer y recomendar, actualización automática) | Metabase, Nominatim |
-| `POST /api/upload` | Lee un Excel/CSV de OTs | Panel (Ajustes) | Data service |
+| `POST /api/upload` | Lee un Excel/CSV de OTs con las columnas de la pregunta | Panel (Ajustes) | — |
 | `GET /api/catalogo` | Bases Bia y sedes de contratistas | App | — |
 | `GET /api/operadores` | OR del catálogo para los nombres que traen las OTs | Panel | — |
 | `GET /api/zonas` | Equipos con sus zonas y tránsito por ciudad | App (y se los pasa al panel) | — |
@@ -225,4 +217,14 @@ Para que Ruteo asigne directo en Olibia hace falta la petición que hace Olibia 
 | La distancia «cerca» (juntar OTs y preferir al técnico que ya tiene OTs cerca) | En la app: *Ajustes → Jornada → Distancia «cerca» (km)* (`radio_grupo_km`) |
 | El orden de las reglas de reparto | `repartir_por_reglas` en `backend/services/optimizer_service/assignment.py` |
 | Cómo decide el motor | `backend/services/optimizer_service/assignment.py` |
-| Qué OTs entran en el plan de un día | `plan_del_dia` en `api_gateway/assignment_routes.py` y `entraEnElDia` en `frontend/src/App.js` |
+| Qué OTs entran en el plan de un día | `plan_del_dia` en `api_gateway/assignment_routes.py` y `entraEnElDia` en `frontend/src/services/plan.js` |
+
+## Pruebas
+
+| Dónde | Qué prueban | Cómo correrlas |
+|---|---|---|
+| `backend/tests` | pytest: lectura de la pregunta y de archivos, nombres, plan del día, reglas de reparto, respaldos y la API completa con el optimizador en el mismo proceso | `cd backend && .venv/bin/python -m pytest` |
+| `frontend/src/**/*.test.js` | jest: `services/plan.js` y `services/cercania.js` | `cd frontend && CI=true npx react-scripts test` |
+| `e2e/` | Playwright: la app compilada con un Metabase simulado (`e2e/servidor/metabase_simulado.py`, fechas relativas a hoy) | `cd e2e && npx playwright test` (o `./probar.sh` para todo) |
+
+`.github/workflows/pruebas.yml` corre las tres en cada push.
