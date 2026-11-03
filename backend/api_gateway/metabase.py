@@ -43,6 +43,8 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
     # Asignación ya hecha en Metabase
     "situacion": ["situacion"],
     "estado_app": ["estado app", "status app"],
+    # El estado de la OT en Olibia: solo se usa para dejar fuera las vencidas
+    "estado": ["estado ot", "estado de la ot", "estado visita", "estado de la visita"],
     "fecha_visita": ["fecha de la visita", "fecha visita", "fecha"],
     "asignado_a": ["electricistas asignados", "electricistas", "tecnicos asignados", "tecnico asignado"],
     "contratista_asignado": ["contratista asignado", "contratista"],
@@ -236,17 +238,35 @@ ESTADOS_APP = {
 }
 
 
+# Vencidas en Olibia («Vencida», «Cierre vencido», EXPIRED): no entran, como las canceladas
+VENCIDAS_APP = {"expired", "overdue"}
+NO_ENTRAN = ("descartada", "vencida")
+
+
 def _clave_estado(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", normalizar_texto(texto)).strip()
+
+
+def _es_vencida(fila: Dict[str, Any], mapeo: Dict[str, str]) -> bool:
+    """Si Situación, Estado o Estado app dicen que la OT está vencida en Olibia"""
+    for campo in ("situacion", "estado", "estado_app"):
+        if campo in mapeo:
+            clave = _clave_estado(_texto(fila.get(mapeo[campo])))
+            if "vencid" in clave or clave in VENCIDAS_APP:
+                return True
+    return False
 
 
 def _estado(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Tuple[str, Optional[str]]:
     """(estado, valor que no se reconoció) según «Situación» o, si no la trae, «Estado app».
 
-    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada) o "descartada"
-    (cancelada o rechazada: no entra). Un archivo sin columnas de estado trae OTs por asignar; un
-    valor que no se reconoce se toma como por asignar, para que se vea, y se avisa.
+    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada), "descartada"
+    (cancelada o rechazada: no entra) o "vencida" (vencida en Olibia en cualquiera de las columnas de
+    estado: no entra aunque la Situación diga por asignar). Un archivo sin columnas de estado trae OTs
+    por asignar; un valor que no se reconoce se toma como por asignar, para que se vea, y se avisa.
     """
+    if _es_vencida(fila, mapeo):
+        return "vencida", None
     desconocido = None
     for campo, valores in (("situacion", SITUACIONES), ("estado_app", ESTADOS_APP)):
         if campo not in mapeo:
@@ -330,9 +350,12 @@ def filas_a_actividades(
         )
     estados = {numero: _estado(fila, mapeo) for numero, fila in enumerate(filas, start=1)}
     descartadas = sum(1 for estado, _ in estados.values() if estado == "descartada")
+    vencidas = sum(1 for estado, _ in estados.values() if estado == "vencida")
     desconocidos = Counter(valor for _, valor in estados.values() if valor)
     if descartadas:
         avisos.append(f"OTs canceladas o rechazadas que no se cargan: {descartadas}")
+    if vencidas:
+        avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas}")
     if desconocidos:
         valores = ", ".join(f"«{v}» ({n})" for v, n in desconocidos.most_common(4))
         avisos.append(f"Estados que Ruteo no conoce, tomados como por asignar: {valores}. Revisa la pregunta")
@@ -394,12 +417,13 @@ def _codigos_por_fila(
     la que sigue por asignar o, si ninguna, la más reciente, y usa el código tal cual. Las visitas
     anteriores ya asignadas o cerradas entran aparte con su fecha (ocuparon a su técnico ese día);
     las anteriores que dicen «por asignar» quedaron atrás con la nueva visita y no cuentan. Dos OTs
-    distintas con el mismo código se distinguen con el número de la orden. Las canceladas no entran.
+    distintas con el mismo código se distinguen con el número de la orden. Las canceladas y las
+    vencidas no entran.
     """
     avisos: List[str] = []
     ots: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
     for numero, fila in enumerate(filas, start=1):
-        if estados[numero][0] == "descartada":
+        if estados[numero][0] in NO_ENTRAN:
             continue
         codigo = _texto(fila.get(mapeo["codigo_bia"])) if "codigo_bia" in mapeo else f"OT-{numero}"
         if not codigo:

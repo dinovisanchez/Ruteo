@@ -56,7 +56,7 @@ const ResultsDashboard = ({ ots, hoy }) => {
     { title: 'Siguen por asignar', value: total.pendientes, hint: 'Metabase todavía las trae por asignar' },
     { title: 'Editadas a mano', value: total.editadas, hint: 'Sugerencias que alguien cambió en Ruteo antes de asignarlas' },
     total.sin_dato ? {
-      title: 'Sin dato', value: total.sin_dato, hint: 'Ya no vienen en la pregunta (canceladas o fuera de sus fechas)',
+      title: 'Sin dato', value: total.sin_dato, hint: 'Ya no vienen en la pregunta (canceladas, vencidas o fuera de sus fechas)',
     } : null,
   ].filter(Boolean) : [];
 

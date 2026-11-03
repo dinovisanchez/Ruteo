@@ -147,6 +147,29 @@ def test_canceladas_no_entran_y_lo_desconocido_se_avisa():
     assert any("«No asignada» (2)" in a and "por asignar" in a for a in avisos)
 
 
+def test_las_vencidas_en_olibia_no_entran_aunque_digan_por_asignar():
+    def con_estados(codigo, situacion, estado, estado_app="PENDING_ASSIGNMENT", fecha=dia(-3)):
+        return fila(codigo, int(codigo[2:]), fecha, situacion, Estado=estado, **{"Estado app": estado_app})
+
+    ots, avisos = leer([
+        con_estados("CO1", P, "Vencida"),
+        con_estados("CO2", P, "Cierre vencido"),
+        con_estados("CO3", P, "Por asignar", "EXPIRED"),
+        con_estados("CO4", "Vencida", ""),
+        # Una pendiente con fecha pasada que no dice vencida sigue entrando (al plan de hoy)
+        con_estados("CO5", P, "Por asignar"),
+        con_estados("CO6", A, "Asignada", "ASSIGNED", dia(1)),
+    ])
+    assert sorted(ots) == ["CO5", "CO6"]
+    assert "OTs vencidas en Olibia que no se cargan: 4" in avisos
+    assert not any("no conoce" in a for a in avisos)
+
+
+def test_una_visita_vencida_no_le_quita_el_codigo_a_la_nueva():
+    ots, _ = leer([fila("CO1", 1, dia(-2), P, Estado="Vencida"), fila("CO1", 1, dia(2), P, Estado="Por asignar")])
+    assert list(ots) == ["CO1"] and ots["CO1"].fecha_visita == dia(2)
+
+
 def test_una_visita_cancelada_no_le_quita_el_codigo_a_la_vigente():
     ots, _ = leer([fila("CO1", 1, dia(3), "Cancelada"), fila("CO1", 1, dia(1), P)])
     assert list(ots) == ["CO1"] and ots["CO1"].fecha_visita == dia(1)

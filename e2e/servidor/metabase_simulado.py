@@ -67,6 +67,10 @@ for k, (ciudad, departamento, operador, lat, lon, tipo) in enumerate([
 for k, (fecha, lat, lon) in enumerate([(MANANA, 4.70, -74.05), (MANANA, 4.61, -74.12), (AYER, 4.68, -74.09)]):
     agregar(f"CO04000{k:05d}", 970000 + k, "Pendiente por asignar", f"{fecha}T09:00:00", None, None, TIPOS[2], "Bogotá", lat, lon)
 
+# Vencida en Olibia: dice por asignar, pero Ruteo no la carga
+agregar("CO1100000000", 999000, "Pendiente por asignar", f"{AYER}T09:00:00", None, None, TIPOS[2], "Bogotá", 4.66, -74.06,
+        estado="Vencida")
+
 # Una OT de hoy sin ubicación
 agregar("CO0500000001", 980001, "Asignada", f"{HOY}T15:00:00", "LUIS BERMUDEZ", "Bia Energy", TIPOS[3], "", None, None,
         direccion="", departamento="")
