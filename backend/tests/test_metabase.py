@@ -37,10 +37,19 @@ def test_cerrada_cuenta_como_asignada_y_se_marca():
 
 
 def test_la_visita_vigente_lleva_el_codigo():
-    # Una OT con dos visitas viejas que dicen «por asignar» y la nueva: solo cuenta la nueva
-    ots, avisos = leer([fila("CO1", 111, dia(-15), P), fila("CO1", 111, dia(-8), P), fila("CO1", 111, dia(2), P)])
+    # Una OT con una visita vencida, otra anterior que dice «por asignar» y la nueva: solo cuenta la nueva
+    ots, avisos = leer([fila("CO1", 111, dia(-15), P), fila("CO1", 111, dia(1), P), fila("CO1", 111, dia(2), P)])
     assert list(ots) == ["CO1"] and ots["CO1"].fecha_visita == dia(2)
     assert any("no cuentan aparte" in a for a in avisos)
+    assert "OTs por asignar con la fecha de visita ya pasada (vencidas), que no se cargan: 1" in avisos
+
+
+def test_las_pendientes_con_la_fecha_pasada_no_aplican():
+    ots, avisos = leer([fila("CO1", 1, dia(-1), P), fila("CO2", 2, f"{dia(0)}T07:00:00", P), fila("CO3", 3, None, P),
+                        fila("CO4", 4, dia(-1), A), fila("CO5", 5, dia(-1), C)])
+    # Las de hoy (aunque la hora ya haya pasado) y las sin fecha sí; las asignadas y cerradas de otros días también
+    assert sorted(ots) == ["CO2", "CO3", "CO4", "CO5"]
+    assert "OTs por asignar con la fecha de visita ya pasada (vencidas), que no se cargan: 1" in avisos
 
 
 def test_visitas_anteriores_cerradas_entran_con_su_fecha():
@@ -156,8 +165,7 @@ def test_las_vencidas_en_olibia_no_entran_aunque_digan_por_asignar():
         con_estados("CO2", P, "Cierre vencido"),
         con_estados("CO3", P, "Por asignar", "EXPIRED"),
         con_estados("CO4", "Vencida", ""),
-        # Una pendiente con fecha pasada que no dice vencida sigue entrando (al plan de hoy)
-        con_estados("CO5", P, "Por asignar"),
+        con_estados("CO5", P, "Por asignar", fecha=dia(1)),
         con_estados("CO6", A, "Asignada", "ASSIGNED", dia(1)),
     ])
     assert sorted(ots) == ["CO5", "CO6"]

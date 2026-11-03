@@ -21,7 +21,7 @@ import {
 } from './services/api';
 import { asignadasCerca } from './services/cercania';
 import {
-  GRUPOS_PENDIENTES, entraEnElDia, esCerrada, firmaOts, grupoPendiente, matchesAssignee, restaurar,
+  GRUPOS_PENDIENTES, entraEnElDia, esCerrada, estaVencida, firmaOts, grupoPendiente, matchesAssignee, restaurar,
 } from './services/plan';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
@@ -67,7 +67,7 @@ const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
     return { dentro: false, texto: `Asignada para el ${fecha}` };
   }
   if (!a.fecha_visita) return { dentro: false, texto: 'Pendiente sin fecha: entra en el plan de hoy' };
-  if (a.fecha_visita < hoy) return { dentro: false, texto: `Vencida (era el ${fecha}): entra en el plan de hoy` };
+  if (a.fecha_visita < hoy) return { dentro: false, texto: `Vencida (era el ${fecha}): no aplica` };
   if (a.fecha_visita !== dia) return { dentro: false, texto: `Pendiente para el ${fecha}` };
   return { dentro: false, texto: 'No entró en el plan' };
 };
@@ -323,7 +323,8 @@ function App() {
   };
 
   // A new day started: whoever was looking at today moves to the new today, and the plan is redone
-  // (with fresh OTs from Metabase if the automatic update is on): overdue pending OTs move to today
+  // (with fresh OTs from Metabase if the automatic update is on): pending OTs of the day before are overdue
+  // and leave the plan
   const hoyAnteriorRef = useRef(hoy);
   const [diasNuevos, setDiasNuevos] = useState(0);
   useEffect(() => {
@@ -505,13 +506,14 @@ function App() {
     };
   }, [plan, pasaFiltros]);
 
-  // Every OT still pending in Metabase, whatever its date, with its decision if it is in the day's plan.
-  // The search and "Asignado a" apply too (an OT of another day has nobody yet)
+  // Every OT still pending in Metabase, whatever its date (not the overdue ones: they do not apply), with
+  // its decision if it is in the day's plan. The search and "Asignado a" apply too (an OT of another day
+  // has nobody yet)
   const pendientesTodas = useMemo(() => {
     const texto = normalizeText(busqueda.trim());
     const decisiones = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d]));
     return (ots || [])
-      .filter((a) => a.situacion === 'pendiente')
+      .filter((a) => a.situacion === 'pendiente' && !estaVencida(a, hoy))
       .map((a) => ({ actividad: a, grupo: grupoPendiente(a.fecha_visita, hoy), decision: decisiones[a.codigo_bia] }))
       .filter(({ actividad: a, decision: d }) => (!asignadoA.length || (d && matchesAssignee(d, asignadoA)))
         && pasaOr(a)
@@ -531,7 +533,6 @@ function App() {
     const cuantas = (grupo) => pendientesTodas.filter((p) => p.grupo === grupo).length;
     return {
       total: pendientesTodas.length,
-      vencidas: cuantas('vencida'),
       hoy: cuantas('hoy'),
       proximas: cuantas('proxima'),
       sinFecha: cuantas('sin_fecha'),
@@ -592,7 +593,7 @@ function App() {
     setEstado(nuevo);
     if (nuevo === 'backlog' && (vista === 'mapa' || vista === 'rutas')) setVista('lista');
   };
-  // From the list of everything pending: plan the day of that OT (overdue and undated ones, today)
+  // From the list of everything pending: plan the day of that OT (undated ones, today)
   const planearDia = (fecha) => {
     const objetivo = fecha && fecha > hoy ? fecha : hoy;
     setEstado('pendientes');

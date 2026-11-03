@@ -27,12 +27,11 @@ const situacion = (valor) => (valor === 'asignada'
   ? <span className="state"><Dot color="#34C759" />Asignada</span>
   : <span className="state"><Dot color="#FF9500" />Por asignar</span>);
 
-// The visit date of an OT in the plan of `dia`: that day, overdue or undated (these two, only today)
-const fechaEnPlan = (actividad, dia) => {
+// The visit date of an OT in the plan of `dia`: that day or undated (only today)
+const fechaEnPlan = (actividad) => {
   const fecha = actividad?.fecha_visita;
   if (!fecha) return 'Sin fecha de visita';
   const hora = actividad.hora_visita ? `, ${actividad.hora_visita}` : '';
-  if (fecha < dia) return `Vencida: era el ${dayjs(fecha).format('D MMM')}${hora}`;
   return `Visita el ${dayjs(fecha).format('D MMM')}${hora}`;
 };
 
@@ -70,7 +69,6 @@ const fechaPendiente = (actividad, grupo, hoy) => {
   if (!fecha) return <span className="state"><Dot color="#C7C7CC" />Sin fecha</span>;
   const dias = Math.abs(dayjs(fecha).diff(dayjs(hoy), 'day'));
   const estado = {
-    vencida: ['#FF3B30', `Vencida hace ${plural(dias, 'día', 'días')}`],
     hoy: ['#FF9500', 'Para hoy'],
     proxima: ['#007AFF', `En ${plural(dias, 'día', 'días')}`],
   }[grupo];
@@ -309,10 +307,9 @@ const AssignmentResults = ({
       color: '#C93400',
       active: estado === 'backlog',
       onClick: porEstado('backlog'),
-      sub: `todas\u00a0las\u00a0fechas${porAsignar.vencidas ? ` · ${plural(porAsignar.vencidas, 'vencida', 'vencidas')}` : ''}`,
+      sub: 'todas\u00a0las\u00a0fechas',
       hint: [
-        'Pendientes de Metabase, sin importar la fecha:',
-        `· vencidas: ${porAsignar.vencidas}`,
+        'Pendientes de Metabase, sin importar la fecha (las vencidas no aplican):',
         `· para hoy: ${porAsignar.hoy}`,
         `· próximos días: ${porAsignar.proximas}`,
         `· sin fecha: ${porAsignar.sinFecha}`,
@@ -404,7 +401,7 @@ const AssignmentResults = ({
       render: (_, r) => (
         <div>
           {situacion(r.decision.situacion)}
-          <div className="ot-cell-sub">{fechaEnPlan(r.actividad, metricas.dia)}</div>
+          <div className="ot-cell-sub">{fechaEnPlan(r.actividad)}</div>
         </div>
       ),
     },
@@ -468,8 +465,7 @@ const AssignmentResults = ({
       <div className="summary-note">
         {pendientesTodas && porAsignar && (
           <span className="summary-count">
-            {plural(porAsignar.total, 'OT', 'OTs')} por asignar: {plural(porAsignar.vencidas, 'vencida', 'vencidas')}
-            {' · '}{porAsignar.hoy} para hoy · {porAsignar.proximas} de próximos días · {porAsignar.sinFecha} sin fecha
+            {plural(porAsignar.total, 'OT', 'OTs')} por asignar: {porAsignar.hoy} para hoy · {porAsignar.proximas} de próximos días · {porAsignar.sinFecha} sin fecha
           </span>
         )}
         {pendientesTodas && (() => {

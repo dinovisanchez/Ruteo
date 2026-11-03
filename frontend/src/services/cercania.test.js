@@ -40,10 +40,13 @@ test('no cuentan las lejanas, las vencidas, las cerradas ni las ubicadas por mun
   expect(asignadasCerca([municipio, ot('A', 'asignada', HOY, punto(4.650, -74.080))], sinCerradas)).toEqual({});
 });
 
-test('una pendiente sin fecha o vencida se compara con las de hoy', () => {
+test('una pendiente sin fecha se compara con las de hoy; una vencida no aplica', () => {
+  const sinFecha = ot('S', 'pendiente', null, punto(4.650, -74.080));
   const vencida = ot('V', 'pendiente', '2026-10-20', punto(4.650, -74.080));
   const deHoy = ot('H', 'asignada', HOY, punto(4.651, -74.080));
-  expect(asignadasCerca([vencida, deHoy], sinCerradas).V[0].mismoDia).toBe(true);
+  const resultado = asignadasCerca([sinFecha, vencida, deHoy], sinCerradas);
+  expect(resultado.S[0].mismoDia).toBe(true);
+  expect(resultado.V).toBeUndefined();
 });
 
 test('ubicacionPrecisa y responsableMetabase', () => {

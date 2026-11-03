@@ -1,5 +1,5 @@
 import {
-  entraEnElDia, esCerrada, firmaOts, grupoPendiente, matchesAssignee, paraOlibia, restaurar,
+  entraEnElDia, esCerrada, estaVencida, firmaOts, grupoPendiente, matchesAssignee, paraOlibia, restaurar,
 } from './plan';
 
 const HOY = '2026-10-28';
@@ -11,20 +11,29 @@ describe('entraEnElDia', () => {
     expect(entraEnElDia({ fecha_visita: '2026-10-30', situacion: 'pendiente' }, '2026-10-29', HOY)).toBe(false);
   });
 
-  test('solo hoy suma las vencidas y las sin fecha', () => {
+  test('solo hoy suma las sin fecha; las vencidas no entran en ningún día', () => {
     const vencida = { fecha_visita: '2026-10-20', situacion: 'pendiente' };
     const sinFecha = { situacion: 'pendiente' };
-    expect(entraEnElDia(vencida, HOY, HOY)).toBe(true);
+    expect(entraEnElDia(vencida, HOY, HOY)).toBe(false);
+    expect(entraEnElDia(vencida, '2026-10-20', HOY)).toBe(false);
     expect(entraEnElDia(sinFecha, HOY, HOY)).toBe(true);
     expect(entraEnElDia(vencida, '2026-10-29', HOY)).toBe(false);
     expect(entraEnElDia(sinFecha, '2026-10-29', HOY)).toBe(false);
+    // Una asignada de un día pasado sí se ve al consultar ese día
+    expect(entraEnElDia({ fecha_visita: '2026-10-20', situacion: 'asignada' }, '2026-10-20', HOY)).toBe(true);
     // Una asignada de otro día no entra, ni vencida
     expect(entraEnElDia({ fecha_visita: '2026-10-20', situacion: 'asignada' }, HOY, HOY)).toBe(false);
   });
 });
 
-test('grupoPendiente ordena vencidas, hoy, próximas y sin fecha', () => {
-  expect(grupoPendiente('2026-10-27', HOY)).toBe('vencida');
+test('estaVencida: solo las por asignar con la fecha ya pasada', () => {
+  expect(estaVencida({ situacion: 'pendiente', fecha_visita: '2026-10-27' }, HOY)).toBe(true);
+  expect(estaVencida({ situacion: 'pendiente', fecha_visita: HOY }, HOY)).toBe(false);
+  expect(estaVencida({ situacion: 'pendiente' }, HOY)).toBe(false);
+  expect(estaVencida({ situacion: 'asignada', fecha_visita: '2026-10-27' }, HOY)).toBe(false);
+});
+
+test('grupoPendiente ordena hoy, próximas y sin fecha', () => {
   expect(grupoPendiente(HOY, HOY)).toBe('hoy');
   expect(grupoPendiente('2026-11-02', HOY)).toBe('proxima');
   expect(grupoPendiente(null, HOY)).toBe('sin_fecha');

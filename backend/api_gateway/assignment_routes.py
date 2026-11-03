@@ -306,8 +306,8 @@ def plan_del_dia(
     """OTs del día y a quién quedan fijadas.
 
     Entran las OTs con fecha de visita `dia`, asignadas o pendientes, igual que en Olibia. Solo
-    el plan de hoy suma además las pendientes vencidas (su fecha ya pasó) y las pendientes sin
-    fecha, para que no queden sin planear. Una asignada queda
+    el plan de hoy suma además las pendientes sin fecha, para que no queden sin planear. Las
+    pendientes vencidas (su fecha ya pasó) no aplican: no entran en ningún plan. Una asignada queda
     fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
     si está en el catálogo, o como externa si su responsable no está en la app. Las
     ediciones a mano mandan sobre lo que dice Metabase.
@@ -321,7 +321,7 @@ def plan_del_dia(
     notas: Dict[str, str] = {}
     parejas: List[List[str]] = []
     sin_registrar: Dict[str, int] = {}
-    otros_dias = sin_fecha = pendientes_otros_dias = 0
+    otros_dias = sin_fecha = pendientes_otros_dias = vencidas = 0
     hoy = hoy_en_colombia().isoformat()
 
     for actividad in actividades:
@@ -333,12 +333,16 @@ def plan_del_dia(
             else:
                 sin_fecha += 1
             continue
+        if actividad.situacion == "pendiente" and fecha and fecha < hoy:
+            # Vencida: su fecha ya pasó y no aplica, ni hoy ni al consultar ese día
+            vencidas += 1
+            continue
         if actividad.situacion == "pendiente" and fecha != dia:
-            # Otro día solo muestra lo que tiene esa fecha; hoy suma las vencidas y las sin fecha
-            if dia != hoy or (fecha and fecha > hoy):
+            # Otro día solo muestra lo que tiene esa fecha; hoy suma además las sin fecha
+            if dia != hoy or fecha:
                 pendientes_otros_dias += 1
                 continue
-            notas[codigo] = f"Pendiente desde el {fecha}" if fecha else "Pendiente sin fecha de visita"
+            notas[codigo] = "Pendiente sin fecha de visita"
         del_dia.append(actividad)
 
         # Una visita cerrada ya se hizo: no se edita ni se vuelve a mandar
@@ -389,6 +393,7 @@ def plan_del_dia(
         "ots_otros_dias": otros_dias,
         "asignadas_sin_fecha": sin_fecha,
         "pendientes_otros_dias": pendientes_otros_dias,
+        "pendientes_vencidas": vencidas,
         "bia_sin_registrar": sorted(sin_registrar),
     }
     return del_dia, fijas, externas, notas, parejas, metricas

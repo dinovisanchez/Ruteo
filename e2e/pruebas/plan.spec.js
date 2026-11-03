@@ -9,8 +9,11 @@ test('al abrir carga las OTs de Metabase y arma el plan de hoy', async ({ page, 
   await expect(page.locator('.app-subtitle')).toContainText(`${ots.length} OTs cargadas`);
   const pendientes = ots.filter((a) => a.situacion === 'pendiente').length;
   await expect(page.locator('.kpi:has-text("Falta por asignar") .kpi-value')).toHaveText(String(pendientes));
-  // La vencida en Olibia no se carga aunque diga por asignar
-  expect(ots.map((a) => a.codigo_bia)).not.toContain('CO1100000000');
+  // Las vencidas no se cargan: la que Olibia marca vencida y la por asignar de ayer
+  const codigos = ots.map((a) => a.codigo_bia);
+  expect(codigos).not.toContain('CO1100000000');
+  expect(codigos).not.toContain('CO0400000002');
+  await expect(page.locator('.kpi:has-text("Falta por asignar")')).not.toContainText('vencida');
 });
 
 test('cada día muestra exactamente sus OTs, también filtradas por OR', async ({ page, request }) => {

@@ -63,7 +63,7 @@ for k, (ciudad, departamento, operador, lat, lon, tipo) in enumerate([
     agregar(f"CO03000{k:05d}", 960000 + k, "Pendiente por asignar", None, None, None, tipo, ciudad, lat, lon, operador,
             departamento=departamento)
 
-# Pendientes con fecha: dos de mañana y una vencida de ayer
+# Pendientes con fecha: dos de mañana y una de ayer (vencida: Ruteo no la carga)
 for k, (fecha, lat, lon) in enumerate([(MANANA, 4.70, -74.05), (MANANA, 4.61, -74.12), (AYER, 4.68, -74.09)]):
     agregar(f"CO04000{k:05d}", 970000 + k, "Pendiente por asignar", f"{fecha}T09:00:00", None, None, TIPOS[2], "Bogotá", lat, lon)
 

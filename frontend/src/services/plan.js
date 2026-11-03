@@ -29,16 +29,18 @@ export const restaurar = (actuales, previas) => {
  * the undated pending ones, so they get planned. Assigned without a date also travel, so the server
  * can report them (they enter no plan).
  */
+// Pending with its visit date already past: overdue, it does not apply (no plan, not in Falta por asignar).
+// The backend no longer loads them; this covers the OTs already loaded when a new day starts
+export const estaVencida = (a, hoy) => a.situacion === 'pendiente' && Boolean(a.fecha_visita) && a.fecha_visita < hoy;
 export const entraEnElDia = (a, dia, hoy) => {
+  if (estaVencida(a, hoy)) return false;
   if (a.fecha_visita === dia) return true;
-  if (!a.fecha_visita) return a.situacion === 'asignada' || dia === hoy;
-  return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
+  return !a.fecha_visita && (a.situacion === 'asignada' || dia === hoy);
 };
-// Pending OTs of any date: overdue first, then today, the next days and those without a date
-export const GRUPOS_PENDIENTES = { vencida: 0, hoy: 1, proxima: 2, sin_fecha: 3 };
+// Pending OTs of any date (not overdue): today, the next days and those without a date
+export const GRUPOS_PENDIENTES = { hoy: 0, proxima: 1, sin_fecha: 2 };
 export const grupoPendiente = (fecha, hoy) => {
   if (!fecha) return 'sin_fecha';
-  if (fecha < hoy) return 'vencida';
   return fecha === hoy ? 'hoy' : 'proxima';
 };
 // Several people can be selected: the OT matches if it goes to any of them

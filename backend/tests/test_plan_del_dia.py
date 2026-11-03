@@ -12,18 +12,20 @@ def plan(actividades, dia_plan, ediciones=None, disponibles=TECNICOS):
     return [a.codigo_bia for a in del_dia], fijas, externas, notas, metricas
 
 
-def test_un_dia_tiene_las_ots_de_esa_fecha_y_hoy_suma_vencidas_y_sin_fecha():
+def test_un_dia_tiene_las_ots_de_esa_fecha_y_hoy_suma_las_sin_fecha_no_las_vencidas():
     actividades = [
         ot("HOY", fecha_visita=dia(0)), ot("MANANA", fecha_visita=dia(1)), ot("VENCIDA", fecha_visita=dia(-2)),
         ot("SIN_FECHA"), ot("ASIG_MANANA", situacion="asignada", fecha_visita=dia(1), asignado_a="Carlos Salas"),
     ]
     hoy, _, _, notas, _ = plan(actividades, dia(0))
-    assert sorted(hoy) == ["HOY", "SIN_FECHA", "VENCIDA"]
-    assert notas["VENCIDA"] == f"Pendiente desde el {dia(-2)}"
+    # Una pendiente con la fecha ya pasada está vencida: no aplica, ni hoy ni otro día
+    assert sorted(hoy) == ["HOY", "SIN_FECHA"]
+    assert notas["SIN_FECHA"] == "Pendiente sin fecha de visita"
     manana, fijas, _, _, metricas = plan(actividades, dia(1))
     assert sorted(manana) == ["ASIG_MANANA", "MANANA"]
     assert fijas == {"ASIG_MANANA": "tecnico:t-carlos"}
-    assert metricas["pendientes_otros_dias"] == 3
+    assert (metricas["pendientes_otros_dias"], metricas["pendientes_vencidas"]) == (2, 1)
+    assert "VENCIDA" not in plan(actividades, dia(-2))[0]
 
 
 def test_asignada_a_tecnico_no_disponible_se_reasigna():

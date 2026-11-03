@@ -56,7 +56,7 @@ export const columnaCerca = (cercanas, radio, actividadDe, ancho = 280) => ({
   title: (
     <Tooltip
       title={`OTs ya asignadas en Metabase, de hoy en adelante, a ${km(radio)} km o menos en línea recta. `
-        + 'Primero las del día en que se planearía la OT (su fecha; las vencidas y las sin fecha, hoy)'}
+        + 'Primero las del día en que se planearía la OT (su fecha; las sin fecha, hoy)'}
     >
       Asignadas cerca
     </Tooltip>

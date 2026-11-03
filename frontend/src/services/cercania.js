@@ -22,7 +22,7 @@ export const responsableMetabase = (a) => {
 /**
  * For each pending OT, the OTs already assigned in Metabase that are `radio` km or less away in a
  * straight line. Only the active ones count: with a visit today or later and not closed. Those of the
- * day the pending OT would be planned (its date, or today if it is overdue or undated) go first,
+ * day the pending OT would be planned (its date, or today if it is undated) go first,
  * then by date and distance. Returns {codigo: [{actividad, km, mismoDia}]}, only for those with some.
  */
 export const asignadasCerca = (ots, { hoy, radio, cerrada }) => {
@@ -30,8 +30,9 @@ export const asignadasCerca = (ots, { hoy, radio, cerrada }) => {
     && a.fecha_visita && a.fecha_visita >= hoy && !cerrada(a));
   const resultado = {};
   (ots || []).forEach((p) => {
-    if (p.situacion !== 'pendiente' || !ubicacionPrecisa(p)) return;
-    const diaPlan = p.fecha_visita && p.fecha_visita > hoy ? p.fecha_visita : hoy;
+    // An overdue pending OT does not apply
+    if (p.situacion !== 'pendiente' || !ubicacionPrecisa(p) || (p.fecha_visita && p.fecha_visita < hoy)) return;
+    const diaPlan = p.fecha_visita || hoy;
     const cerca = activas
       .map((a) => ({ actividad: a, km: kmEntre(p.coordinates, a.coordinates), mismoDia: a.fecha_visita === diaPlan }))
       .filter((c) => c.km <= radio)

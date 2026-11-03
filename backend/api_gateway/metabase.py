@@ -18,7 +18,7 @@ from dateutil import parser as dateutil_parser
 from shared.catalogo import normalizar_texto, parse_coordenadas
 from shared.config import settings
 from shared.models import Activity, GPSCoordinates
-from shared.utils import setup_logging, validate_gps_colombia
+from shared.utils import hoy, setup_logging, validate_gps_colombia
 
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
 
@@ -351,11 +351,22 @@ def filas_a_actividades(
     estados = {numero: _estado(fila, mapeo) for numero, fila in enumerate(filas, start=1)}
     descartadas = sum(1 for estado, _ in estados.values() if estado == "descartada")
     vencidas = sum(1 for estado, _ in estados.values() if estado == "vencida")
+    # Por asignar con la fecha de visita ya pasada: también vencidas, no aplican
+    hoy_iso = hoy().isoformat()
+    pasadas = 0
+    if "fecha_visita" in mapeo:
+        for numero, fila in enumerate(filas, start=1):
+            fecha = _fecha(fila.get(mapeo["fecha_visita"]))
+            if estados[numero][0] == "pendiente" and fecha and fecha < hoy_iso:
+                estados[numero] = ("vencida", None)
+                pasadas += 1
     desconocidos = Counter(valor for _, valor in estados.values() if valor)
     if descartadas:
         avisos.append(f"OTs canceladas o rechazadas que no se cargan: {descartadas}")
     if vencidas:
         avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas}")
+    if pasadas:
+        avisos.append(f"OTs por asignar con la fecha de visita ya pasada (vencidas), que no se cargan: {pasadas}")
     if desconocidos:
         valores = ", ".join(f"«{v}» ({n})" for v, n in desconocidos.most_common(4))
         avisos.append(f"Estados que Ruteo no conoce, tomados como por asignar: {valores}. Revisa la pregunta")
