@@ -544,7 +544,18 @@ async def obtener_config():
 
 @router.put("/asignacion/config", response_model=AsignacionConfig)
 async def actualizar_config(config: AsignacionConfig):
-    """Guarda técnicos in-house y contratistas por OR"""
+    """Guarda técnicos in-house y contratistas por OR.
+
+    Si otra persona guardó desde que esta abrió la configuración (`version` vieja), se rechaza en vez
+    de borrar sus cambios. Lo que la app aprende sola (ids de electricistas, técnicos de la hoja) se
+    toma de lo guardado, no de lo que manda el navegador.
+    """
+    guardada = leer_config()
+    if config.version != guardada.version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Otra persona cambió la configuración mientras la tenías abierta: recarga la página y vuelve a hacer tu cambio",
+        )
     sedes = {s.id for s in obtener_catalogo()["sedes"]}
     empresas = {s.empresa_id for s in obtener_catalogo()["sedes"] if s.tipo == "contratista"}
     if config.card_id is not None:
@@ -572,6 +583,9 @@ async def actualizar_config(config: AsignacionConfig):
             )
     # Se descartan los OR sin contratistas para que usen la regla "el más cercano de todos"
     config.or_contratistas = {k.strip(): v for k, v in config.or_contratistas.items() if k.strip() and v}
+    config.ids_electricistas = guardada.ids_electricistas
+    config.hoja_importados = guardada.hoja_importados
+    config.version = guardada.version + 1
     guardar_config(config)
     return config
 
@@ -705,6 +719,12 @@ async def asignar(request: AsignarRequest):
     ]
     # El mapa pide estas mismas rutas; se trazan ya para que estén listas al abrirlo
     trazado.precargar([puntos_ruta(r, jornada.incluir_retorno) for r in resultado.rutas])
+    # Para medir después cuántas sugerencias quedaron así en Metabase
+    from .resultados import registrar
+    try:
+        registrar(resultado.metricas["dia"], resultado.decisiones, request.fijas)
+    except OSError as e:
+        logger.warning(f"No se pudieron guardar las sugerencias: {e}")
     return resultado
 
 

@@ -10,9 +10,11 @@ import dayjs from 'dayjs';
 
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
+import { useSesion } from './components/Acceso';
 import LoteBar, { POR_CERCANIA } from './components/LoteBar';
 import LoteModal from './components/LoteModal';
 import OtsTable from './components/OtsTable';
+import ResultsDashboard from './components/ResultsDashboard';
 import UtilizationDashboard from './components/UtilizationDashboard';
 import {
   assignActivities, getCatalog, getOperators, getUtilization, getZones, proposeBatch,
@@ -132,6 +134,8 @@ function App() {
   const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
   const [zonas, setZonas] = useState({ equipos: [], transito: [] });
   const hoy = useHoy();
+  // On a shared server: who is signed in, to show it with «Salir»
+  const sesion = useSesion();
   const [dia, setDia] = useState(hoy);
   const [vista, setVista] = useState('lista');
   // The plan on screen is always the one of the chosen day: while another day is being calculated
@@ -573,6 +577,8 @@ function App() {
   }, [alcanceTabla, ots, plan, dia, hoy, mapeo]);
 
   const backlog = estado === 'backlog';
+  // Views of several days, not of the plan of one: they hide the filters of the day
+  const vistaResumen = vista === 'utilizacion' || vista === 'resultados';
   // Views where the chosen date does not apply: the date box says so instead of showing a day
   const sinDia = backlog ? 'Todas las fechas'
     : vista === 'tabla' && alcanceTabla === 'todas' ? 'Todas las fechas'
@@ -630,6 +636,13 @@ function App() {
             )}
           </Space>
           <Space size={6}>
+            {sesion.cuenta && (
+              <span className="app-subtitle sesion">
+                {sesion.cuenta.nombre}
+                {' · '}
+                <button type="button" className="link-button" onClick={sesion.salir}>Salir</button>
+              </span>
+            )}
             {ots?.length > 0 && (
               <Tooltip title="Recalcular con los ajustes actuales">
                 <Button type="text" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
@@ -725,13 +738,14 @@ function App() {
                   { value: 'mapa', label: 'Mapa' },
                   { value: 'rutas', label: 'Rutas' },
                   { value: 'utilizacion', label: 'Utilización' },
+                  { value: 'resultados', label: 'Resultados' },
                   { value: 'tabla', label: 'Tabla completa' },
                 ]}
               />
             </div>
 
             <div className="filter-bar">
-              {vista !== 'utilizacion' && (
+              {!vistaResumen && (
                 <Input
                   allowClear
                   variant="filled"
@@ -766,7 +780,7 @@ function App() {
               {dia !== hoy && (
                 <Button type="link" disabled={busy} onClick={() => changeDay(hoy)} style={{ paddingInline: 4 }}>Hoy</Button>
               )}
-              {vista !== 'utilizacion' && (
+              {!vistaResumen && (
               <Segmented
                 value={estado}
                 onChange={filtrarEstado}
@@ -801,7 +815,7 @@ function App() {
                 // It grows with the people chosen, so their names show instead of "+ 2 ..."
                 style={{ width: asignadoA.length ? Math.min(460, 140 + asignadoA.length * 150) : 180 }}
               />
-              {vista !== 'utilizacion' && (
+              {!vistaResumen && (
                 <Select
                   mode="multiple"
                   allowClear
@@ -903,6 +917,7 @@ function App() {
                   </>
                 ) : <EmptyState />
               )}
+              {vista === 'resultados' && <ResultsDashboard ots={ots} hoy={hoy} />}
               {vista === 'utilizacion' && (
                 <UtilizationDashboard
                   ots={ots}
@@ -915,7 +930,7 @@ function App() {
                   onCapacidad={(cambio) => setCapacidad((prev) => ({ ...prev, ...cambio }))}
                 />
               )}
-              {vista !== 'tabla' && vista !== 'utilizacion' && (plan ? (
+              {vista !== 'tabla' && !vistaResumen && (plan ? (
                 <AssignmentResults
                   result={plan}
                   ots={ots}

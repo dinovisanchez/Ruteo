@@ -14,6 +14,7 @@ sys.path.insert(0, str(BACKEND))
 _CARPETA = Path(tempfile.mkdtemp(prefix="ruteo-pruebas-"))
 os.environ.update({
     "ASIGNACION_CONFIG_PATH": str(_CARPETA / "asignacion.json"),
+    "RESULTADOS_PATH": str(_CARPETA / "sugerencias.json"),
     "GEOCODING_ENABLED": "false",
     "GOOGLE_GEOCODING_API_KEY": "",
     "OSRM_URL": "",

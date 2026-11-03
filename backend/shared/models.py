@@ -213,6 +213,8 @@ class AsignacionConfig(BaseModel):
     hoja_importados: List[str] = Field(default_factory=list)
     # Id del electricista en Olibia → id del técnico; se aprende de las OTs con un solo electricista
     ids_electricistas: Dict[str, str] = Field(default_factory=dict)
+    # Sube cada vez que alguien guarda desde la app: un guardado con una versión vieja se rechaza
+    version: int = 0
 
 
 class Zona(BaseModel):

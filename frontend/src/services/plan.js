@@ -49,3 +49,25 @@ export const matchesAssignee = (decision, values) => !values.length || values.so
   if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
   return decision.enviar_a === 'externo' && decision.responsable === nombre;
 });
+
+const DESTINO_OLIBIA = { tecnico: 'Técnico Bia', contratista: 'Contratista' };
+
+/**
+ * What still has to be done in Olibia from the plan: the pending OTs Ruteo sends to someone and the
+ * ones edited by hand (also reassigned assigned ones). Until Ruteo assigns in Olibia directly, this
+ * list is copied into a sheet or downloaded.
+ */
+export const paraOlibia = (rows, fijas) => rows
+  .filter(({ decision: d }) => (d.enviar_a === 'tecnico' || d.enviar_a === 'contratista')
+    && (d.situacion === 'pendiente' || fijas[d.codigo_bia]))
+  .map(({ decision: d, actividad: a }) => ({
+    codigo: d.codigo_bia,
+    fecha: a?.fecha_visita || '',
+    hora: d.hora_llegada ? d.hora_llegada.slice(0, 5) : (a?.hora_visita || ''),
+    ciudad: a?.ciudad || '',
+    direccion: a?.direccion || '',
+    destino: DESTINO_OLIBIA[d.enviar_a],
+    responsable: d.responsable || '',
+    cambio: d.situacion === 'asignada' ? `Reasignar (estaba con ${a?.asignado_a || a?.contratista_asignado || 'otro'})` : 'Asignar',
+    editada: Boolean(fijas[d.codigo_bia]),
+  }));

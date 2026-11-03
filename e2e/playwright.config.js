@@ -15,6 +15,7 @@ const PYTHON = process.env.PYTHON || (fs.existsSync(VENV) ? VENV : 'python3');
 if (!process.env.TEST_WORKER_INDEX) {
   fs.mkdirSync(SALIDA, { recursive: true });
   fs.rmSync(CONFIG, { force: true });
+  fs.rmSync(path.join(SALIDA, 'sugerencias.json'), { force: true });
 }
 
 const entorno = {
@@ -25,6 +26,7 @@ const entorno = {
   METABASE_API_KEY: 'test-key',
   METABASE_CARD_ID: '44',
   ASIGNACION_CONFIG_PATH: CONFIG,
+  RESULTADOS_PATH: path.join(SALIDA, 'sugerencias.json'),
   OSRM_URL: 'http://localhost:3010',
   OSRM_URL_RESPALDO: '',
   OSRM_PAUSA_SEGUNDOS: '0',

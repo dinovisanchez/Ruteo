@@ -1,5 +1,5 @@
 import {
-  entraEnElDia, esCerrada, firmaOts, grupoPendiente, matchesAssignee, restaurar,
+  entraEnElDia, esCerrada, firmaOts, grupoPendiente, matchesAssignee, paraOlibia, restaurar,
 } from './plan';
 
 const HOY = '2026-10-28';
@@ -65,4 +65,26 @@ describe('matchesAssignee', () => {
     expect(matchesAssignee(contratista, ['t:Carlos Salas', 'c:MONTAJES MTE'])).toBe(true);
   });
   test('sin asignar', () => expect(matchesAssignee({ enviar_a: 'sin_asignar' }, ['sin'])).toBe(true));
+});
+
+describe('paraOlibia', () => {
+  const fila = (codigo, enviarA, situacion, extra = {}) => ({
+    decision: { codigo_bia: codigo, enviar_a: enviarA, situacion, responsable: 'Carlos Salas', hora_llegada: '09:30:00' },
+    actividad: { codigo_bia: codigo, fecha_visita: '2026-10-29', ciudad: 'Bogotá', direccion: 'Calle 1', ...extra },
+  });
+  test('lleva las sugeridas, las elegidas a mano y las reasignadas; no lo que ya está así en Metabase', () => {
+    const filas = [
+      fila('SUGERIDA', 'tecnico', 'pendiente'),
+      fila('A_MANO', 'contratista', 'pendiente'),
+      fila('REASIGNADA', 'tecnico', 'asignada', { asignado_a: 'Juan Reyes' }),
+      fila('IGUAL', 'tecnico', 'asignada'),
+      fila('SIN_DESTINO', 'sin_asignar', 'pendiente'),
+      fila('EXTERNA', 'externo', 'asignada'),
+    ];
+    const lista = paraOlibia(filas, { A_MANO: 'empresa:x', REASIGNADA: 'tecnico:t2' });
+    expect(lista.map((f) => f.codigo)).toEqual(['SUGERIDA', 'A_MANO', 'REASIGNADA']);
+    expect(lista[0]).toMatchObject({ fecha: '2026-10-29', hora: '09:30', destino: 'Técnico Bia', cambio: 'Asignar' });
+    expect(lista[2].cambio).toBe('Reasignar (estaba con Juan Reyes)');
+    expect(lista.map((f) => f.editada)).toEqual([false, true, true]);
+  });
 });

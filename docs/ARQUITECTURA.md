@@ -59,12 +59,14 @@ flowchart LR
 
 | Módulo | Qué hace |
 |---|---|
-| `main.py` | Crea la app, CORS, el chequeo de host (solo `localhost`/`127.0.0.1`), `/api/health` y monta los routers bajo `/api` |
+| `main.py` | Crea la app, CORS, el chequeo de host (`ALLOWED_HOSTS`), el login (`acceso.py`), `/api/health` y monta los routers bajo `/api`. Si existe la app compilada (`frontend/build` o `FRONTEND_DIR`), la sirve en `/` |
 | `assignment_routes.py` | Endpoints del plan: Metabase, archivo (`/upload`), catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
 | `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. `_estado` lee *Situación* / *Estado app* por valor exacto (`SITUACIONES`, `ESTADOS_APP`) y `_momento` pasa fechas con zona a la hora de Colombia |
 | `geocoding.py` | Ubica las OTs sin GPS con Nominatim o, con `GOOGLE_GEOCODING_API_KEY`, con Google: municipio enseguida, dirección (normalizada con `normalizar_direccion`) en segundo plano, con caché en `data/geocache.json` y una consulta por segundo para Nominatim. Las que solo dan la calle o el municipio llevan `ubicacion_imprecisa` y no cuentan como cerca de nada; las no encontradas se reintentan a los 7 días |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
+| `resultados.py` | Guarda lo que sugiere cada plan de hoy en adelante (`registrar`, en `data/sugerencias.json`) y `/resultados` lo compara con lo que trae Metabase: aceptadas, cambiadas, pendientes |
+| `acceso.py` | Login con Google para un servidor compartido: con `GOOGLE_CLIENT_ID`, el middleware `ExigirCuenta` pide un token de Google válido de los dominios permitidos en cada `/api` (salvo `/api/health` y `/api/auth/config`) |
 | `archivo.py` | Lee un Excel (`.xlsx`) o CSV (coma o punto y coma, UTF-8 o latin-1) como filas de la pregunta; `/upload` las pasa por `filas_a_actividades` igual que Metabase |
 
 ### Optimizer (`backend/services/optimizer_service`, puerto 8003)
@@ -82,7 +84,7 @@ Cómo decide `asignar`:
 4. Arma **cuadrillas** de 1 o 2 personas según lo que piden las OTs (`armar_cuadrillas`). Un técnico con una OT fijada de 2 personas no sale solo.
 5. Junta las OTs libres que están a **2 km o menos** entre sí (`grupos_cercanos`, `radio_grupo_km`): viajan como un solo punto, así las hace una sola cuadrilla. Si un grupo no cabe en ninguna jornada, se separa y se vuelve a resolver.
 6. Decide la **cuadrilla de cada grupo libre** con reglas (`repartir_por_reglas`), entre las cuadrillas de su equipo en cuya jornada cabe: primero la que ya tiene OTs a 2 km o menos ese día; si ninguna, una que todavía no tiene OTs; si todas tienen OTs lejos, la de menor carga en la semana (`uso_previo` más lo del día). Cada decisión cuenta para las siguientes.
-7. Resuelve un **VRP con OR-Tools** (`_resolver_vrp`) con esas cuadrillas fijas: ordena cada ruta con tiempos por carretera y tránsito y revisa que quepa en la jornada.
+7. Resuelve un **VRP con OR-Tools** (`_resolver_vrp`) con esas cuadrillas fijas: ordena cada ruta con tiempos por carretera y tránsito y revisa que quepa en la jornada. Con hasta 12 paradas usa descenso simple (termina en milisegundos); con más, búsqueda guiada hasta el tiempo límite.
 8. Lo que no cabe en los técnicos va al **contratista más cercano de su OR** (`_asignar_contratistas`).
 9. Devuelve rutas, una **decisión por OT** con su motivo, y métricas.
 
@@ -128,6 +130,10 @@ Cómo decide `asignar`:
 | `services/osrm.js` | OSRM desde el navegador, de respaldo |
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
 | `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
+| `services/sesion.js` | Sesión de «Iniciar sesión con Google» (token en `sessionStorage`) |
+| `components/Acceso.jsx` | Pide la cuenta de Google antes de mostrar la app cuando el servidor tiene login |
+| `components/ResultsDashboard.jsx` | Vista *Resultados*: lo sugerido frente a lo asignado |
+| `components/OlibiaModal.jsx` | *Para Olibia*: lo que falta llevar a Olibia, para copiar o descargar |
 | `services/plan.js` | Reglas del día que no dependen de la pantalla: qué OTs entran en un día, grupos de pendientes, cuándo el plan quedó viejo, filtros por persona |
 
 ## Endpoints y quién los usa
@@ -218,6 +224,10 @@ Para que Ruteo asigne directo en Olibia hace falta la petición que hace Olibia 
 | El orden de las reglas de reparto | `repartir_por_reglas` en `backend/services/optimizer_service/assignment.py` |
 | Cómo decide el motor | `backend/services/optimizer_service/assignment.py` |
 | Qué OTs entran en el plan de un día | `plan_del_dia` en `api_gateway/assignment_routes.py` y `entraEnElDia` en `frontend/src/services/plan.js` |
+
+## En un servidor
+
+`Dockerfile` arma una sola imagen: compila la app con `REACT_APP_API_URL=/api` (misma dirección que la API) y corre `servidor.sh`, que arranca el optimizador en `127.0.0.1:8003` y el gateway en `0.0.0.0:$PORT` (8000). Los datos que cambian (`ASIGNACION_CONFIG_PATH`, `RESULTADOS_PATH`, `GEOCACHE_PATH`) van al volumen `/datos`. La configuración lleva una `version`: un guardado con una versión vieja recibe 409.
 
 ## Pruebas
 

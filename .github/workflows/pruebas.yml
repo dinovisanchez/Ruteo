@@ -82,3 +82,27 @@ jobs:
           name: pruebas-navegador
           path: e2e/salida/
           retention-days: 7
+
+  imagen:
+    name: Imagen Docker (servidor)
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t ruteo .
+      - name: Sin login, la imagen sirve la app y la API
+        run: |
+          docker run -d --name ruteo -p 8000:8000 ruteo
+          for i in $(seq 1 60); do curl -sf localhost:8000/api/health >/dev/null && break; sleep 1; done
+          curl -sf localhost:8000/ | grep -F '<div id="root">' >/dev/null
+          curl -sf localhost:8000/api/auth/config | grep -F '"google_client_id":null' >/dev/null
+          curl -sf localhost:8000/api/catalogo >/dev/null
+          docker rm -f ruteo
+      - name: Con GOOGLE_CLIENT_ID, la API pide iniciar sesión
+        run: |
+          docker run -d --name ruteo -p 8000:8000 -e GOOGLE_CLIENT_ID=prueba.apps.googleusercontent.com ruteo
+          for i in $(seq 1 60); do curl -sf localhost:8000/api/health >/dev/null && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/catalogo)" = 401
+          curl -sf localhost:8000/api/auth/config | grep -F 'prueba.apps.googleusercontent.com' >/dev/null
+      - if: failure()
+        run: docker logs ruteo || true

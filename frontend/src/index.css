@@ -1107,3 +1107,59 @@ body {
   color: var(--accent);
   cursor: default;
 }
+
+/* Resultados: lo que sugirió Ruteo frente a lo que quedó en Metabase */
+.results-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+}
+
+.section-title {
+  margin: 24px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Inicio de sesión con Google (solo en un servidor compartido) */
+.login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fill);
+  padding: 16px;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 360px;
+  padding: 32px 28px;
+  border-radius: 18px;
+  background: #fff;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.login-icon {
+  width: 56px;
+  height: 56px;
+}
+
+.login-title {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.login-button {
+  min-height: 44px;
+}
+
+.app-subtitle.sesion {
+  white-space: nowrap;
+}

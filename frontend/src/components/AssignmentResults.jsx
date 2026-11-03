@@ -5,6 +5,8 @@ import {
 import { DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
+import OlibiaModal from './OlibiaModal';
+import { paraOlibia } from '../services/plan';
 import { columnaCerca } from './AsignadasCerca';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
@@ -237,6 +239,7 @@ const AssignmentResults = ({
     () => Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion])),
     [result],
   );
+  const [olibiaAbierto, setOlibiaAbierto] = useState(false);
 
   if (!result) return null;
   const { metricas } = result;
@@ -491,10 +494,24 @@ const AssignmentResults = ({
           <span>{metricas.ots_agrupadas} OTs van juntas por estar a {km(metricas.radio_grupo_km)} km o menos</span>
         ) : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
+        {view === 'lista' && !pendientesTodas && (
+          <Tooltip title="Lo que falta llevar a Olibia: sugeridas, elegidas a mano y reasignadas, para copiar o descargar">
+            <Button type="link" size="small" className="link-button" onClick={() => setOlibiaAbierto(true)}>
+              Para Olibia ({paraOlibia(rows, fijas).length})
+            </Button>
+          </Tooltip>
+        )}
         <Tooltip title="Descargar el plan en CSV">
           <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />
         </Tooltip>
       </div>
+
+      <OlibiaModal
+        abierto={olibiaAbierto}
+        filas={olibiaAbierto ? paraOlibia(rows, fijas) : []}
+        dia={metricas.dia}
+        onCerrar={() => setOlibiaAbierto(false)}
+      />
 
       {view === 'lista' && pendientesTodas && (
         <Table

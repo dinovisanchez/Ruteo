@@ -2,17 +2,21 @@
 import sys
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from shared.config import settings
 from shared.models import HealthResponse
 from shared.utils import setup_logging
 from .assignment_routes import router as assignment_router
 from .utilizacion import router as utilizacion_router
+from .resultados import router as resultados_router
+from .acceso import ExigirCuenta, router as acceso_router
 
 # Setup logging
 logger = setup_logging("api-gateway", settings.LOG_LEVEL)
@@ -39,6 +43,8 @@ app = FastAPI(
     lifespan=ciclo,
 )
 
+# El más interno: con el login activo, cada llamada a /api necesita una cuenta de Bia
+app.add_middleware(ExigirCuenta)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS)
 
 # Configure CORS
@@ -54,6 +60,8 @@ app.add_middleware(
 # Include routes
 app.include_router(assignment_router, prefix="/api", tags=["Asignación por OR"])
 app.include_router(utilizacion_router, prefix="/api", tags=["Utilización de técnicos"])
+app.include_router(resultados_router, prefix="/api", tags=["Resultados de Ruteo"])
+app.include_router(acceso_router, prefix="/api", tags=["Acceso"])
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -62,16 +70,21 @@ async def health_check():
     return HealthResponse(status="healthy", service="api-gateway", version=settings.VERSION)
 
 
-@app.get("/")
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "name": settings.PROJECT_NAME,
-        "version": settings.VERSION,
-        "status": "running",
-        "docs": "/docs",
-        "api": "/api"
-    }
+# En un servidor el gateway también sirve la app compilada (npm run build), en la misma dirección
+FRONTEND = Path(settings.FRONTEND_DIR) if settings.FRONTEND_DIR else Path(__file__).resolve().parents[2] / "frontend" / "build"
+if (FRONTEND / "index.html").exists():
+    app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="app")
+else:
+    @app.get("/")
+    async def root():
+        """Root endpoint with API information"""
+        return {
+            "name": settings.PROJECT_NAME,
+            "version": settings.VERSION,
+            "status": "running",
+            "docs": "/docs",
+            "api": "/api"
+        }
 
 
 if __name__ == "__main__":

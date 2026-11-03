@@ -29,7 +29,9 @@ GOOGLE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 # Nominatim exige un User-Agent que identifique la aplicación y máximo 1 consulta por segundo
 USER_AGENT = "Ruteo-Bia/1.0"
 PAUSA_SEGUNDOS = 1.1
-CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "geocache.json"
+CACHE_PATH = Path(settings.GEOCACHE_PATH) if settings.GEOCACHE_PATH else (
+    Path(__file__).resolve().parent.parent / "data" / "geocache.json"
+)
 
 # Direcciones que se buscan en segundo plano después de cada extracción (Nominatim: 1 por segundo)
 MAX_SEGUNDO_PLANO = 200

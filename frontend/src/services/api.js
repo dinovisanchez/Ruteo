@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { avisarSesionVencida, sesionActual } from './sesion';
 
 // API base URL
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
@@ -12,10 +13,12 @@ const apiClient = axios.create({
   },
 });
 
-// Request interceptor for logging
+// Request interceptor for logging and the session
 apiClient.interceptors.request.use(
   (config) => {
     console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
+    const actual = sesionActual();
+    if (actual) config.headers.Authorization = `Bearer ${actual.token}`;
     return config;
   },
   (error) => {
@@ -35,6 +38,7 @@ apiClient.interceptors.response.use(
 
     // Extract error message
     let errorMessage = 'Ocurrió un error';
+    if (error.response?.status === 401) avisarSesionVencida();
     if (error.response) {
       const detalle = error.response.data?.detail;
       // A request the backend rejects as invalid lists each field with its problem
@@ -68,6 +72,15 @@ export const uploadFile = async (file) => {
     },
   });
 
+  return response.data;
+};
+
+/**
+ * Whether the server asks for «Iniciar sesión con Google» and with which Google app
+ * @returns {Promise<Object>} { google_client_id, dominios }
+ */
+export const getAuthConfig = async () => {
+  const response = await apiClient.get('/auth/config');
   return response.data;
 };
 
@@ -181,6 +194,16 @@ export const getZones = async () => {
  */
 export const getUtilization = async (request) => {
   const response = await apiClient.post('/utilizacion', request);
+  return response.data;
+};
+
+/**
+ * What Ruteo suggested between two days and how it ended up in Metabase
+ * @param {Object} request - { actividades, desde, hasta }
+ * @returns {Promise<Object>} { total, por_destino, por_dia, cambiadas }
+ */
+export const getResults = async (request) => {
+  const response = await apiClient.post('/resultados', request);
   return response.data;
 };
 

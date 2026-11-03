@@ -145,7 +145,12 @@ def _resolver_vrp(
 
     parametros = pywrapcp.DefaultRoutingSearchParameters()
     parametros.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    parametros.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    # Pocas paradas: el descenso termina en cuanto no hay mejora (milisegundos). La búsqueda guiada
+    # sigue buscando hasta el tiempo límite, y solo vale la pena con muchas paradas
+    parametros.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GREEDY_DESCENT if n <= PARADAS_DESCENSO
+        else routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    )
     parametros.time_limit.seconds = limite_segundos
 
     solucion = routing.SolveWithParameters(parametros)
@@ -422,6 +427,10 @@ def repartir_por_reglas(
         if propias:
             decididos[n] = decision(n, min(propias))
     return decididos
+
+
+# Hasta estas paradas el solver usa descenso simple en vez de búsqueda guiada
+PARADAS_DESCENSO = 12
 
 
 def _limite_solver(num_actividades: int) -> int:

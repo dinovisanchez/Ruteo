@@ -44,9 +44,10 @@ async def health_check():
 
 
 @app.post("/assign", response_model=AssignmentResult)
-async def assign_activities(request: AssignmentRequest):
+def assign_activities(request: AssignmentRequest):
     """
-    Assign activities to in-house technicians or to the nearest contractor of each OR
+    Assign activities to in-house technicians or to the nearest contractor of each OR.
+    Plain def: FastAPI runs it in a worker thread, so a long plan does not block other requests
     """
     try:
         logger.info(f"Assigning {len(request.actividades)} activities, mode: {request.modo}")
@@ -87,7 +88,7 @@ class LotePedido(BaseModel):
 
 
 @app.post("/lote", response_model=dict)
-async def lote(request: LotePedido):
+def lote(request: LotePedido):
     """Propuesta para un lote: OTs cercanas juntas, cada grupo al técnico con la UTR más baja"""
     try:
         return repartir_lote(request.pedido, request.codigos, request.plan_actual)

@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import 'dayjs/locale/es';
 import './index.css';
 import App from './App';
+import Acceso from './components/Acceso';
 import iosTheme from './theme';
 
 dayjs.locale('es');
@@ -14,7 +15,9 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
     <ConfigProvider theme={iosTheme} locale={esES}>
-      <App />
+      <Acceso>
+        <App />
+      </Acceso>
     </ConfigProvider>
   </React.StrictMode>
 );

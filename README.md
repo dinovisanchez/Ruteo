@@ -32,7 +32,7 @@ visita*, *Latitud*/*Longitud* o *GPS*…) y no se guarda. Un `.xls` viejo se gua
 
 La arquitectura (servicios, endpoints, qué pantalla usa cada uno y los flujos) está en [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md).
 
-Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*. La **barra de herramientas** del borde izquierdo esconde y muestra ese panel (la app recuerda cómo lo dejaste) y con sus iconos lo abre directo en *Técnicos*, *Contratistas por OR*, *Tipos de OT* o *Ajustes*; en pantallas pequeñas el panel empieza escondido y se abre sobre el contenido.
+Ruteo es una sola pantalla: pulsa **Extraer y recomendar** (arriba a la derecha) y la app trae las OTs de la pregunta de Metabase y arma el **plan del día**: a quién enviar cada OT y por qué. Arriba se elige la vista (*Lista*, *Mapa*, *Rutas*, *Utilización*, *Resultados* o *Tabla completa* con todas las columnas de la pregunta) y se filtra. A la izquierda, en secciones plegables, están los **técnicos** de cada equipo (con un interruptor de disponibilidad), los contratistas por OR, los tipos de OT y los *Ajustes*. La **barra de herramientas** del borde izquierdo esconde y muestra ese panel (la app recuerda cómo lo dejaste) y con sus iconos lo abre directo en *Técnicos*, *Contratistas por OR*, *Tipos de OT* o *Ajustes*; en pantallas pequeñas el panel empieza escondido y se abre sobre el contenido.
 
 ### Plan del día
 
@@ -79,6 +79,19 @@ La vista **Utilización** muestra, por técnico de Bia y por equipo, las horas u
 **Quién hizo cada OT.** El responsable es el del *Id electricista* de la visita (la app aprende sola qué técnico es cada id, a partir de las OTs con un solo electricista); de los demás de *Electricistas asignados* solo cuentan tantos como personas pide el tipo de OT, así una OT de una persona no se le suma a dos técnicos. Un tramo de más de 200 km se toma como dirección mal ubicada y su viaje se estima. En el detalle de cada técnico, cada día muestra sus OTs (códigos), horas en OTs y de viaje, y km, para revisarlo contra el plan de ese día. El plan y la utilización usan la misma regla.
 
 Los técnicos se reconocen en *Electricistas asignados* aunque el nombre venga con segundo nombre, en mayúsculas o con otra ortografía (Jhonatan / Jonathan, Gelvez / Gelver). El nombre de pila tiene que sonar igual (Daniela no es Daniel, María no es Mario); la letra de diferencia solo se acepta en los apellidos. Solo se buscan técnicos de Bia en las OTs cuyo *Contratista asignado* es Bia o viene vacío. Si un *Id electricista* aprendido antes aparece en OTs de un contratista, la app lo olvida; y si una OT nueva de un solo electricista dice otra cosa, manda la OT. Los técnicos de la pestaña *Tecnicos* de la hoja se agregan solos a la app. Si alguien aparece en Metabase como técnico de Bia pero no está registrado, la app lo avisa en lugar de tratarlo como externo.
+
+### Resultados (para los KRs) y lista para Olibia
+
+**Resultados.** Cada vez que la app calcula el plan de hoy o de un día próximo guarda lo que sugiere para las OTs pendientes (a qué técnico de Bia o a qué contratista), en `backend/data/sugerencias.json`. La vista **Resultados** lo compara con lo que trae ahora Metabase, en los últimos 7, 30 o 90 días:
+
+- **Sugeridas**: OTs pendientes que Ruteo mandó a alguien (vale la última vez que se calculó el plan de ese día).
+- **Quedaron así**: de las que ya se asignaron en Metabase, el porcentaje que quedó con quien sugirió Ruteo (para un técnico, que esté entre los electricistas asignados; para un contratista, la misma empresa). También por técnicos y por contratistas.
+- **Cambiadas**: se asignaron a otra persona o empresa; la tabla de abajo dice qué sugirió Ruteo y con quién quedó.
+- **Siguen por asignar**, **Editadas a mano** (sugerencias que alguien cambió en Ruteo) y **Sin dato** (ya no vienen en la pregunta).
+
+Sirven como indicadores del proyecto: porcentaje de OTs que se asignan como recomienda Ruteo, cuántas se corrigen a mano y, con la vista *Utilización*, cómo queda repartida la carga.
+
+**Para Olibia.** Ruteo todavía no escribe en Olibia. En la lista del día, **Para Olibia (N)** junta lo que falta llevar allá: las sugeridas, las elegidas a mano y las reasignadas, con fecha, hora estimada, ciudad, dirección y a quién asignarlas. Respeta los filtros (por ejemplo, un OR). **Copiar** las deja listas para pegar en una hoja de cálculo y **Descargar CSV** las guarda. Cuando se asignan en Olibia, en la siguiente actualización aparecen como asignadas.
 
 ### Tiempos de desplazamiento y de cada visita
 
@@ -213,6 +226,25 @@ Si OSRM, Nominatim o Metabase responden con una página de error en vez de datos
 > Para decidir y estimar horarios, las distancias son en línea recta multiplicadas por un **factor vial** (1,3 por defecto, ajustable en *Ajustes*); el mapa sí dibuja la ruta por las vías.
 
 Endpoints: `GET /api/health`, `GET /api/metabase/estado`, `GET /api/metabase/ots?card_id=`, `GET /api/catalogo`, `GET /api/operadores`, `GET /api/tecnicos/hoja`, `GET|PUT /api/asignacion/config`, `POST /api/asignar` (con `dia`, `fijas` y `transito`), `POST /api/asignar/lote` (propuesta por cercanía para las OTs elegidas), `POST /api/rutas/trazado`, `GET /api/rutas/estado`, `GET /api/zonas`, `POST /api/utilizacion`, `POST /api/upload` (Excel o CSV).
+
+## En un servidor de Bia
+
+Para que todos los coordinadores usen el mismo Ruteo (la misma configuración de técnicos y contratistas, los mismos resultados) en vez de uno en cada Mac, hay una imagen de Docker con todo: la app compilada, el gateway y el optimizador.
+
+```bash
+docker build -t ruteo .
+docker run -d -p 8000:8000 --env-file backend/.env -v ruteo-datos:/datos \
+  -e GOOGLE_CLIENT_ID=<client id> -e ALLOWED_HOSTS='["ruteo.bia.app"]' ruteo
+```
+
+- **Datos**: la configuración, las sugerencias y el caché de direcciones quedan en `/datos`; móntalo como volumen para no perderlos al actualizar.
+- **Login con Google**: en Google Cloud → *APIs y servicios* → *Credenciales* → *Crear ID de cliente de OAuth* (tipo *Aplicación web*), con la dirección del servidor en *Orígenes de JavaScript autorizados* (por ejemplo `https://ruteo.bia.app`). El *ID de cliente* va en `GOOGLE_CLIENT_ID` (no es secreto). Con él, Ruteo pide iniciar sesión con Google y solo deja entrar cuentas de `DOMINIOS_PERMITIDOS` (`["bia.app"]` por defecto) o de `CORREOS_PERMITIDOS`. Sin él no hay login: úsalo solo dentro de la red de Bia.
+- **Dirección**: `ALLOWED_HOSTS` es la lista de nombres con que se entra (la imagen acepta cualquiera si no se pone). Va detrás de HTTPS (un balanceador o un proxy): Google exige HTTPS para el login, salvo en `localhost`.
+- **Metabase, Google Geocoding, OSRM**: las mismas variables de `backend/.env`.
+- **Varias personas a la vez**: si dos guardan cambios de configuración al tiempo, el segundo recibe un aviso para recargar en vez de borrar lo del primero.
+- Sin Docker: compila la app con `REACT_APP_API_URL=/api npm run build` en `frontend/` y corre `./servidor.sh` (en Linux).
+
+En GitHub, cada push construye la imagen y revisa que sirva la app y que con `GOOGLE_CLIENT_ID` pida iniciar sesión.
 
 ## Pruebas
 

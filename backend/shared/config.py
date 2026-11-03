@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     # (DNS rebinding) gets refused instead of using the Metabase key
     ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "api-gateway"]
 
+    # Servidor compartido: login con Google (vacío = sin login, como en el Mac de cada coordinador)
+    GOOGLE_CLIENT_ID: str = ""  # OAuth client id de tipo «Aplicación web» en Google Cloud
+    DOMINIOS_PERMITIDOS: List[str] = ["bia.app"]
+    CORREOS_PERMITIDOS: List[str] = []  # Cuentas de fuera de esos dominios que también pueden entrar
+    # La app compilada (npm run build); si existe, el gateway la sirve en / (vacío = frontend/build)
+    FRONTEND_DIR: str = ""
+
     # GPS validation (Colombia boundaries)
     MIN_LATITUDE: float = -4.2
     MAX_LATITUDE: float = 13.4
@@ -56,12 +63,15 @@ class Settings(BaseSettings):
     CONTRATISTAS_CSV_PATH: str = ""  # Por defecto backend/data/contratistas.csv
     # Técnicos y contratistas por OR que se editan desde la app
     ASIGNACION_CONFIG_PATH: str = ""  # Por defecto backend/data/asignacion.json
+    # Sugerencias de cada plan, para medir cuántas quedaron así en Metabase
+    RESULTADOS_PATH: str = ""  # Por defecto backend/data/sugerencias.json
 
     # Geocodificación para OTs que llegan sin GPS: Nominatim (gratis, 1 consulta por segundo) o, con una
     # llave de la API Geocoding de Google, Google (entiende mejor las direcciones de Colombia; cobra por uso)
     GEOCODING_ENABLED: bool = True
     GEOCODING_MAX_POR_CONSULTA: int = 30
     GOOGLE_GEOCODING_API_KEY: str = ""
+    GEOCACHE_PATH: str = ""  # Por defecto backend/data/geocache.json
 
     # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
     OSRM_URL: str = "https://router.project-osrm.org"

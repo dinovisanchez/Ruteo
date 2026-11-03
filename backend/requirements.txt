@@ -10,3 +10,5 @@ openpyxl==3.1.5
 ortools==9.12.4544
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
+# Verifica el token de «Iniciar sesión con Google» en un servidor compartido
+PyJWT[crypto]==2.10.1
