@@ -13,8 +13,9 @@ import OrContractorsModal, { buildOrRows } from './OrContractorsModal';
 import OtTypesModal from './OtTypesModal';
 import {
   getMetabaseStatus, fetchMetabaseOTs, getAssignmentConfig, saveAssignmentConfig, uploadFile,
-  getOperators, getSheetTechnicians,
+  getOperators, getSheetTechnicians, API_BASE_URL,
 } from '../services/api';
+import { avisoSinBackend } from '../services/backend';
 import { otTypeSettings, normalizeText } from '../services/otTypes';
 import { formatCop } from '../services/format';
 
@@ -677,7 +678,7 @@ const AssignmentPanel = forwardRef(({
           showIcon
           className="ios-alert"
           message="No hay conexión con el backend"
-          description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
+          description={avisoSinBackend(API_BASE_URL, window.location.origin)}
         />
       )}
       {status && !status.sinBackend && !status.configurado && (

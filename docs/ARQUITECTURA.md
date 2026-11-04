@@ -229,6 +229,8 @@ Para que Ruteo asigne directo en Olibia hace falta la petición que hace Olibia 
 
 `Dockerfile` arma una sola imagen: compila la app con `REACT_APP_API_URL=/api` (misma dirección que la API) y corre `servidor.sh`, que arranca el optimizador en `127.0.0.1:8003` y el gateway en `0.0.0.0:$PORT` (8000). Los datos que cambian (`ASIGNACION_CONFIG_PATH`, `RESULTADOS_PATH`, `GEOCACHE_PATH`) van al volumen `/datos`. La configuración lleva una `version`: un guardado con una versión vieja recibe 409.
 
+`servidor.sh` no arranca sin `GOOGLE_CLIENT_ID` (salvo `SIN_LOGIN=1`). Si la pantalla se sirve en otra dirección (Vercel), se compila con `REACT_APP_API_URL=https://<backend>/api` y el backend la deja llamar con `FRONTEND_URL` (se suma a `CORS_ORIGINS`). Sin backend, `services/backend.js` arma el aviso según dónde está abierta la app.
+
 ## Pruebas
 
 | Dónde | Qué prueban | Cómo correrlas |

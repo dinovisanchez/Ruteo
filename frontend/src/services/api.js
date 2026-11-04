@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { avisarSesionVencida, sesionActual } from './sesion';
 
-// API base URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+// API base URL: on the Mac, the local backend; on a server (Vercel), REACT_APP_API_URL when building
+export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 // Create axios instance with default config
 const apiClient = axios.create({

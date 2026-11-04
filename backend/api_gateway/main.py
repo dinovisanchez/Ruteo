@@ -50,7 +50,8 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.ALLOWED_HOSTS)
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    # La app en otra dirección (Vercel) también puede llamar a la API
+    allow_origins=settings.CORS_ORIGINS + [u.strip().rstrip("/") for u in settings.FRONTEND_URL.split(",") if u.strip()],
     allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],

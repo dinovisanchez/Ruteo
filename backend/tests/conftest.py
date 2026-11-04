@@ -22,6 +22,8 @@ os.environ.update({
     "METABASE_URL": "http://metabase.prueba",
     "METABASE_API_KEY": "clave-de-prueba",
     "METABASE_CARD_ID": "44",
+    # La app servida en otra dirección (como en Vercel)
+    "FRONTEND_URL": "https://ruteo.vercel.app/, https://otra.example",
 })
 
 import httpx  # noqa: E402

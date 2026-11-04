@@ -80,3 +80,15 @@ def test_un_guardado_con_version_vieja_se_rechaza_y_lo_aprendido_se_conserva(cli
     # Otra pestaña con la configuración de antes
     vieja = cliente.put("/api/asignacion/config", json=config)
     assert vieja.status_code == 409 and "recarga la página" in vieja.json()["detail"]
+
+
+def test_la_app_en_vercel_puede_llamar_a_la_api_y_otra_pagina_no(cliente):
+    def permiso(origen):
+        r = cliente.options("/api/health", headers={"Origin": origen, "Access-Control-Request-Method": "GET",
+                                                     "Access-Control-Request-Headers": "authorization"})
+        return r.headers.get("access-control-allow-origin")
+
+    assert permiso("https://ruteo.vercel.app") == "https://ruteo.vercel.app"
+    assert permiso("https://otra.example") == "https://otra.example"
+    assert permiso("http://localhost:3000") == "http://localhost:3000"
+    assert permiso("https://pagina-cualquiera.example") is None

@@ -90,19 +90,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker build -t ruteo .
-      - name: Sin login, la imagen sirve la app y la API
+      - name: Sin GOOGLE_CLIENT_ID ni SIN_LOGIN=1 no arranca
         run: |
-          docker run -d --name ruteo -p 8000:8000 ruteo
+          set +e
+          salida=$(timeout 60 docker run --rm ruteo 2>&1); codigo=$?
+          set -e
+          echo "$salida"
+          test "$codigo" -ne 0 && test "$codigo" -ne 124
+          echo "$salida" | grep -F 'no arranca sin login' >/dev/null
+      - name: Con SIN_LOGIN=1, la imagen sirve la app y la API
+        run: |
+          docker run -d --name ruteo -p 8000:8000 -e SIN_LOGIN=1 ruteo
           for i in $(seq 1 60); do curl -sf localhost:8000/api/health >/dev/null && break; sleep 1; done
           curl -sf localhost:8000/ | grep -F '<div id="root">' >/dev/null
           curl -sf localhost:8000/api/auth/config | grep -F '"google_client_id":null' >/dev/null
           curl -sf localhost:8000/api/catalogo >/dev/null
           docker rm -f ruteo
-      - name: Con GOOGLE_CLIENT_ID, la API pide iniciar sesión
+      - name: Con GOOGLE_CLIENT_ID, la API pide iniciar sesión y deja entrar a la app en Vercel
         run: |
-          docker run -d --name ruteo -p 8000:8000 -e GOOGLE_CLIENT_ID=prueba.apps.googleusercontent.com ruteo
+          docker run -d --name ruteo -p 8000:8000 -e GOOGLE_CLIENT_ID=prueba.apps.googleusercontent.com \
+            -e FRONTEND_URL=https://ruteo.vercel.app ruteo
           for i in $(seq 1 60); do curl -sf localhost:8000/api/health >/dev/null && break; sleep 1; done
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/catalogo)" = 401
           curl -sf localhost:8000/api/auth/config | grep -F 'prueba.apps.googleusercontent.com' >/dev/null
+          curl -s -o /dev/null -D - -X OPTIONS localhost:8000/api/catalogo -H 'Origin: https://ruteo.vercel.app' \
+            -H 'Access-Control-Request-Method: GET' | grep -Fi 'access-control-allow-origin: https://ruteo.vercel.app' >/dev/null
       - if: failure()
         run: docker logs ruteo || true
