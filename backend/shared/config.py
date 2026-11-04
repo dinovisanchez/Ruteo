@@ -1,5 +1,5 @@
-"""Configuration settings for Route Optimizer services"""
-from pydantic_settings import BaseSettings
+"""Configuration of Ruteo's backend: read from backend/.env"""
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 import os
 
@@ -8,26 +8,15 @@ class Settings(BaseSettings):
     """Application settings with environment variable support"""
 
     # Project metadata
-    PROJECT_NAME: str = "Route Optimizer"
+    PROJECT_NAME: str = "Ruteo"
     VERSION: str = "1.0.0"
-    DESCRIPTION: str = "Microservices-based route optimization system for field crews"
+    DESCRIPTION: str = "Plan del día de las OTs: técnicos de Bia y contratistas por OR"
 
-    # Service URLs
-    DATA_SERVICE_URL: str = os.getenv("DATA_SERVICE_URL", "http://localhost:8001")
-    DISTANCE_SERVICE_URL: str = os.getenv("DISTANCE_SERVICE_URL", "http://localhost:8002")
+    # The gateway asks the optimizer for each plan
     OPTIMIZER_SERVICE_URL: str = os.getenv("OPTIMIZER_SERVICE_URL", "http://localhost:8003")
 
-    # Redis configuration
-    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
-    REDIS_DB: int = 0
-    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
-    CACHE_TTL: int = 3600  # 1 hour in seconds
-
-    # File upload configuration
-    UPLOAD_DIR: str = "./uploads"
+    # Excel/CSV upload: largest file accepted
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB
-    ALLOWED_EXTENSIONS: List[str] = [".xlsx", ".xls", ".csv"]
 
     # CORS configuration
     CORS_ORIGINS: List[str] = [
@@ -37,12 +26,19 @@ class Settings(BaseSettings):
     ]
     # The dev server moves to 3001, 3002... when 3000 is busy; accept any local port
     CORS_ORIGIN_REGEX: str = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+    # Where the app is served when it is not this same server (for example on Vercel):
+    # https://ruteo.vercel.app, or several separated by commas
+    FRONTEND_URL: str = ""
+    # Names the gateway answers to: a web page that points another domain at this computer
+    # (DNS rebinding) gets refused instead of using the Metabase key
+    ALLOWED_HOSTS: List[str] = ["localhost", "127.0.0.1", "api-gateway"]
 
-    # Optimization defaults
-    DEFAULT_WORK_HOURS: float = 8.0
-    DEFAULT_SPEED_KMH: float = 30.0
-    DEFAULT_START_TIME: str = "08:00"
-    DEFAULT_END_TIME: str = "17:00"
+    # Servidor compartido: login con Google (vacío = sin login, como en el Mac de cada coordinador)
+    GOOGLE_CLIENT_ID: str = ""  # OAuth client id de tipo «Aplicación web» en Google Cloud
+    DOMINIOS_PERMITIDOS: List[str] = ["bia.app"]
+    CORREOS_PERMITIDOS: List[str] = []  # Cuentas de fuera de esos dominios que también pueden entrar
+    # La app compilada (npm run build); si existe, el gateway la sirve en / (vacío = frontend/build)
+    FRONTEND_DIR: str = ""
 
     # GPS validation (Colombia boundaries)
     MIN_LATITUDE: float = -4.2
@@ -50,10 +46,8 @@ class Settings(BaseSettings):
     MIN_LONGITUDE: float = -81.8
     MAX_LONGITUDE: float = -66.9
 
-    # Optimization parameters
-    MAX_ACTIVITIES_PER_CREW: int = 20
-    MIN_ACTIVITIES_PER_CREW: int = 1
-    OPTIMIZATION_TIMEOUT_SECONDS: int = 300  # 5 minutes
+    # Zona horaria de las OTs: «hoy» y las horas de visita de Metabase se leen en esta zona
+    ZONA_HORARIA: str = "America/Bogota"
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -72,10 +66,15 @@ class Settings(BaseSettings):
     CONTRATISTAS_CSV_PATH: str = ""  # Por defecto backend/data/contratistas.csv
     # Técnicos y contratistas por OR que se editan desde la app
     ASIGNACION_CONFIG_PATH: str = ""  # Por defecto backend/data/asignacion.json
+    # Sugerencias de cada plan, para medir cuántas quedaron así en Metabase
+    RESULTADOS_PATH: str = ""  # Por defecto backend/data/sugerencias.json
 
-    # Geocodificación (Nominatim) para OTs que llegan sin GPS
+    # Geocodificación para OTs que llegan sin GPS: Nominatim (gratis, 1 consulta por segundo) o, con una
+    # llave de la API Geocoding de Google, Google (entiende mejor las direcciones de Colombia; cobra por uso)
     GEOCODING_ENABLED: bool = True
     GEOCODING_MAX_POR_CONSULTA: int = 30
+    GOOGLE_GEOCODING_API_KEY: str = ""
+    GEOCACHE_PATH: str = ""  # Por defecto backend/data/geocache.json
 
     # Trazado de las rutas por la red vial (OSRM); vacío = líneas rectas en el mapa
     OSRM_URL: str = "https://router.project-osrm.org"
@@ -84,10 +83,8 @@ class Settings(BaseSettings):
     # El servidor público de OSRM pide máximo una consulta por segundo
     OSRM_PAUSA_SEGUNDOS: float = 1.0
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
-        extra = "ignore"  # El .env puede traer variables de otros componentes (ej. REACT_APP_*)
+    # El .env puede traer variables de otros componentes (ej. REACT_APP_*) o de versiones anteriores
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
 
 # Global settings instance

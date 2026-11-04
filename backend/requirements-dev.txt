@@ -1,0 +1,3 @@
+# Para correr las pruebas: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==8.4.2

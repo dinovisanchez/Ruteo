@@ -72,9 +72,6 @@ yarn-error.log*
 frontend/build/
 frontend/.eslintcache
 
-# Docker
-.dockerignore
-
 # Database
 *.db
 *.sqlite
@@ -99,4 +96,9 @@ Thumbs.db
 # Datos que la app escribe en tiempo de ejecución
 backend/data/asignacion.json
 backend/data/geocache.json
+backend/data/sugerencias.json
 backend/data/*.tmp
+
+# Pruebas de navegador: dependencias, registros e informes
+e2e/node_modules/
+e2e/salida/

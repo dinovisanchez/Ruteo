@@ -1,0 +1,15 @@
+# Lo que no va en la imagen: dependencias locales, compilados, pruebas, secretos y datos de cada equipo
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+frontend/build
+e2e
+logs
+**/.env
+**/.env.local
+backend/uploads
+backend/data/asignacion.json
+backend/data/geocache.json
+backend/data/sugerencias.json
+backend/data/*.tmp

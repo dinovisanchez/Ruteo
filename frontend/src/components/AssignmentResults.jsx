@@ -3,7 +3,11 @@ import {
   Table, Collapse, Button, Tooltip, Descriptions, Select,
 } from 'antd';
 import { DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
+import OlibiaModal from './OlibiaModal';
+import { paraOlibia } from '../services/plan';
+import { columnaCerca } from './AsignadasCerca';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
 
@@ -23,6 +27,22 @@ const situacion = (valor) => (valor === 'asignada'
   ? <span className="state"><Dot color="#34C759" />Asignada</span>
   : <span className="state"><Dot color="#FF9500" />Por asignar</span>);
 
+// The visit date of an OT in the plan of `dia`: that day or undated (only today)
+const fechaEnPlan = (actividad) => {
+  const fecha = actividad?.fecha_visita;
+  if (!fecha) return 'Sin fecha de visita';
+  const hora = actividad.hora_visita ? `, ${actividad.hora_visita}` : '';
+  return `Visita el ${dayjs(fecha).format('D MMM')}${hora}`;
+};
+
+// Where the destination comes from: still pending (a suggestion), assigned or closed in Metabase, or edited
+const origenDecision = (d, editada, cerrada = false) => {
+  if (d.enviar_a === 'sin_asignar') return 'Sin asignar';
+  if (cerrada) return 'Cerrada en Metabase';
+  if (editada) return d.situacion === 'asignada' ? 'Reasignada a mano' : 'Elegido a mano, sigue por asignar';
+  return d.situacion === 'asignada' ? 'Asignada en Metabase' : 'Sugerido por Ruteo';
+};
+
 const otCell = (actividad, codigo, nuevas) => (
   <div className="ot-cell">
     <span className="ot-code">{codigo}</span>
@@ -33,8 +53,32 @@ const otCell = (actividad, codigo, nuevas) => (
       </Tooltip>
     )}
     <div className="ot-cell-sub">{[actividad?.servicio, actividad?.nombre, actividad?.ciudad].filter(Boolean).join(' · ')}</div>
+    {actividad?.creado_por && (
+      <div className="ot-cell-sub ot-creator">
+        Creada por {actividad.creado_por}{actividad.fecha_creacion ? ` el ${dayjs(actividad.fecha_creacion).format('D MMM')}` : ''}
+      </div>
+    )}
   </div>
 );
+
+const plural = (n, singular, varias) => `${n}\u00a0${n === 1 ? singular : varias}`;
+
+// When each pending OT is due, with how late or how soon
+const fechaPendiente = (actividad, grupo, hoy) => {
+  const fecha = actividad.fecha_visita;
+  if (!fecha) return <span className="state"><Dot color="#C7C7CC" />Sin fecha</span>;
+  const dias = Math.abs(dayjs(fecha).diff(dayjs(hoy), 'day'));
+  const estado = {
+    hoy: ['#FF9500', 'Para hoy'],
+    proxima: ['#007AFF', `En ${plural(dias, 'día', 'días')}`],
+  }[grupo];
+  return (
+    <div>
+      <span className="state"><Dot color={estado[0]} />{estado[1]}</span>
+      <div className="ot-cell-sub">{dayjs(fecha).format('ddd D MMM YYYY')}</div>
+    </div>
+  );
+};
 
 const DetailRow = ({ row, alternativas }) => {
   const { decision: d, actividad } = row;
@@ -70,13 +114,15 @@ const exportCsv = (rows, dia) => {
 
   // ";" and decimal comma so it opens directly in Excel configured in Spanish
   const header = ['Día', 'OT', 'Situación', 'OR', 'Ciudad', 'Dirección', 'Tipo de OT', 'Personas', 'Enviar a', 'Responsable',
-    'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Motivo', ...extraKeys];
+    'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Creada por',
+    'Fecha de creación', 'Motivo', ...extraKeys];
   const lines = rows.map(({ decision: d, actividad: a, parada }) => [
     dia, d.codigo_bia, d.situacion === 'asignada' ? 'Asignada' : 'Por asignar', a?.or_operador, a?.ciudad, a?.direccion,
     a?.servicio, a?.personas_requeridas, DESTINO[d.enviar_a], d.responsable, d.fijada ? 'Sí' : 'No', d.sede,
     d.distancia_base_km === null || d.distancia_base_km === undefined ? '' : String(d.distancia_base_km).replace('.', ','),
     parada?.secuencia, hhmm(parada?.hora_llegada_estimada), hhmm(parada?.hora_salida_estimada),
-    a?.coordenadas_aproximadas ? 'Sí' : 'No', d.motivo, ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
+    a?.coordenadas_aproximadas ? 'Sí' : 'No', a?.creado_por, a?.fecha_creacion, d.motivo,
+    ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
   ]);
   const csv = [header, ...lines].map((row) => row.map(csvValue).join(';')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
@@ -104,7 +150,7 @@ const stopColumns = (nuevas, situaciones) => [
  * Options to change who attends an OT: let the app decide, an available technician,
  * the nearest contractor of its OR, or a specific contractor.
  */
-const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
+export const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
   {
     label: 'Automático',
     options: [{ value: 'auto', label: yaAsignada ? 'Que la app la reasigne' : 'Que decida la app' }],
@@ -133,7 +179,9 @@ const editOptions = (tecnicos, empresas, alternativas, yaAsignada) => [
 ];
 
 // Who attends the OT; the pencil opens the list to send it to someone else
-const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
+const EnviarA = ({
+  decision: d, editada, cerrada, options, onEdit, editing,
+}) => {
   const [abierto, setAbierto] = useState(false);
   return (
     <div className="assignee">
@@ -155,7 +203,9 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
           </Tooltip>
         )}
       </div>
-      <div className="assignee-sub">{DESTINO[d.enviar_a]}{editada ? ' · editada a mano' : ''}</div>
+      <div className="assignee-sub">
+        {origenDecision(d, editada, cerrada)}{d.enviar_a !== 'sin_asignar' ? ` · ${DESTINO[d.enviar_a]}` : ''}
+      </div>
       {abierto && (
         <Select
           size="small"
@@ -179,13 +229,15 @@ const EnviarA = ({ decision: d, editada, options, onEdit, editing }) => {
 
 const AssignmentResults = ({
   result, ots, nuevas, incluirRetorno, view = 'lista', visibles = null, conteos = null, estado = 'todas', destino = null,
-  onFiltrar, horasDia = 8.4, porAsignar = null,
+  onFiltrar, horasDia = 8.4, porAsignar = null, pendientesTodas = null, onPlanearDia, hoy, cercanas = {}, radioCerca = 2,
+  seleccion = [], onSeleccion,
   fijas = {}, onEdit, tecnicos = [], empresas = [], editing,
 }) => {
   const situaciones = useMemo(
     () => Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d.situacion])),
     [result],
   );
+  const [olibiaAbierto, setOlibiaAbierto] = useState(false);
 
   if (!result) return null;
   const { metricas } = result;
@@ -207,6 +259,8 @@ const AssignmentResults = ({
     parada: paradas[d.codigo_bia],
   }));
   const rows = visibles ? allRows.filter((r) => visibles.has(r.decision.codigo_bia)) : allRows;
+  // The ones that can still be (re)assigned: not the visits already closed
+  const abiertas = rows.filter((r) => !r.actividad?.cerrada);
 
   // Routes with some OT that passes the filters: their km, hours and cost are the ones the tiles add up
   const rutasVisibles = result.rutas
@@ -244,21 +298,41 @@ const AssignmentResults = ({
       color: '#C93400',
       active: estado === 'pendientes',
       onClick: porEstado('pendientes'),
-      // Without a person or search selected: everything still pending in Metabase, of any date
-      // (non-breaking spaces: when it wraps, it wraps between the two parts)
-      sub: porAsignar ? `${porAsignar.total}\u00a0en\u00a0total${porAsignar.vencidas
-        ? ` · ${porAsignar.vencidas}\u00a0${porAsignar.vencidas > 1 ? 'vencidas' : 'vencida'}` : ''}` : null,
-      hint: porAsignar ? [
-        `Pendientes del día: ${c.pendiente}`,
-        `Pendientes en total: ${porAsignar.total}`,
-        `· vencidas: ${porAsignar.vencidas}`,
+      hint: 'Pendientes que entran en el plan de este día',
+    },
+    // Everything still pending in Metabase, whatever its date
+    porAsignar ? {
+      title: 'Falta por asignar',
+      value: porAsignar.total,
+      color: '#C93400',
+      active: estado === 'backlog',
+      onClick: porEstado('backlog'),
+      sub: 'todas\u00a0las\u00a0fechas',
+      hint: [
+        'Pendientes de Metabase, sin importar la fecha (las vencidas no aplican):',
         `· para hoy: ${porAsignar.hoy}`,
         `· próximos días: ${porAsignar.proximas}`,
         `· sin fecha: ${porAsignar.sinFecha}`,
-      ].join('\n') : null,
+      ].join('\n'),
+    } : null,
+    {
+      title: 'Técnicos Bia',
+      value: c.tecnico,
+      color: '#007AFF',
+      active: destino === 'tecnico',
+      onClick: porDestino('tecnico'),
+      sub: c.tecnico_sugeridas ? `${c.tecnico_sugeridas} ${c.tecnico_sugeridas === 1 ? 'sugerida' : 'sugeridas'}` : null,
+      hint: 'Asignadas en Metabase a técnicos Bia más las sugeridas por Ruteo (siguen por asignar)',
     },
-    { title: 'Técnicos Bia', value: c.tecnico, color: '#007AFF', active: destino === 'tecnico', onClick: porDestino('tecnico') },
-    { title: 'Contratistas', value: c.contratista, color: '#AF52DE', active: destino === 'contratista', onClick: porDestino('contratista') },
+    {
+      title: 'Contratistas',
+      value: c.contratista,
+      color: '#AF52DE',
+      active: destino === 'contratista',
+      onClick: porDestino('contratista'),
+      sub: c.contratista_sugeridas ? `${c.contratista_sugeridas} ${c.contratista_sugeridas === 1 ? 'sugerida' : 'sugeridas'}` : null,
+      hint: 'Asignadas en Metabase a contratistas más las sugeridas por Ruteo (siguen por asignar)',
+    },
     metricas.ots_externas
       ? { title: 'Externas', value: c.externo, active: destino === 'externo', onClick: porDestino('externo') }
       : null,
@@ -283,6 +357,37 @@ const AssignmentResults = ({
       : null,
   ].filter(Boolean);
 
+  const backlogColumns = [
+    {
+      title: 'OT',
+      fixed: 'left',
+      width: 280,
+      render: (_, p) => otCell(p.actividad, p.actividad.codigo_bia, nuevas),
+    },
+    { title: 'Fecha de visita', width: 190, render: (_, p) => fechaPendiente(p.actividad, p.grupo, hoy) },
+    { title: 'OR', width: 120, render: (_, p) => p.actividad.or_operador },
+    columnaCerca(cercanas, radioCerca, (p) => p.actividad),
+    {
+      title: `Plan del ${dayjs(metricas.dia).format('D MMM')}`,
+      width: 240,
+      render: (_, p) => (p.decision ? (
+        <div className="assignee">
+          <div className="assignee-name">{p.decision.responsable || DESTINO[p.decision.enviar_a]}</div>
+          <div className="assignee-sub">{origenDecision(p.decision)} · {DESTINO[p.decision.enviar_a]}</div>
+        </div>
+      ) : <span className="muted-text">No entra en este día</span>),
+    },
+    {
+      title: '',
+      width: 150,
+      render: (_, p) => (
+        <Button type="link" size="small" style={{ paddingInline: 0 }} onClick={() => onPlanearDia?.(p.actividad.fecha_visita)}>
+          {p.grupo === 'proxima' ? `Planear el ${dayjs(p.actividad.fecha_visita).format('D MMM')}` : 'Planear hoy'}
+        </Button>
+      ),
+    },
+  ];
+
   const columns = [
     {
       title: 'OT',
@@ -292,8 +397,13 @@ const AssignmentResults = ({
     },
     {
       title: 'Estado',
-      width: 120,
-      render: (_, r) => situacion(r.decision.situacion),
+      width: 160,
+      render: (_, r) => (
+        <div>
+          {situacion(r.decision.situacion)}
+          <div className="ot-cell-sub">{fechaEnPlan(r.actividad)}</div>
+        </div>
+      ),
     },
     {
       title: 'Enviar a',
@@ -308,8 +418,10 @@ const AssignmentResults = ({
           <EnviarA
             decision={d}
             editada={fijas[d.codigo_bia]}
+            cerrada={Boolean(r.actividad?.cerrada)}
             options={editOptions(tecnicos, empresas, alternativas, d.situacion === 'asignada')}
-            onEdit={onEdit}
+            // A closed visit was already done: it is not sent to anyone else
+            onEdit={r.actividad?.cerrada ? undefined : onEdit}
             editing={editing}
           />
         );
@@ -351,16 +463,85 @@ const AssignmentResults = ({
         ))}
       </div>
       <div className="summary-note">
-        {visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
+        {pendientesTodas && porAsignar && (
+          <span className="summary-count">
+            {plural(porAsignar.total, 'OT', 'OTs')} por asignar: {porAsignar.hoy} para hoy · {porAsignar.proximas} de próximos días · {porAsignar.sinFecha} sin fecha
+          </span>
+        )}
+        {pendientesTodas && (() => {
+          const conCerca = pendientesTodas.filter((p) => cercanas[p.actividad.codigo_bia]);
+          const mismoDia = conCerca.filter((p) => cercanas[p.actividad.codigo_bia].some((c) => c.mismoDia)).length;
+          return (
+            <span>
+              {conCerca.length} tienen OTs asignadas a {km(radioCerca)} km o menos
+              {conCerca.length ? ` (${mismoDia} ese mismo día)` : ''}
+            </span>
+          );
+        })()}
+        {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
-        {metricas.reparto_por_semana ? <span>Reparto parejo según la UTR de la semana</span> : null}
+        {metricas.tecnicos_disponibles && metricas.radio_grupo_km !== undefined ? (
+          <span>
+            Reparto: {metricas.radio_grupo_km > 0 ? `primero quien tiene OTs a ${km(metricas.radio_grupo_km)} km o menos, luego ` : 'primero '}
+            quien está libre y luego la menor UTR{metricas.reparto_por_semana ? ' de la semana' : ' del día'}
+          </span>
+        ) : null}
+        {metricas.ots_agrupadas ? (
+          <span>{metricas.ots_agrupadas} OTs van juntas por estar a {km(metricas.radio_grupo_km)} km o menos</span>
+        ) : null}
         {avisos.map((a) => <span key={a} className="warn-text">{a}</span>)}
+        {view === 'lista' && !pendientesTodas && (
+          <Tooltip title="Lo que falta llevar a Olibia: sugeridas, elegidas a mano y reasignadas, para copiar o descargar">
+            <Button type="link" size="small" className="link-button" onClick={() => setOlibiaAbierto(true)}>
+              Para Olibia ({paraOlibia(rows, fijas).length})
+            </Button>
+          </Tooltip>
+        )}
         <Tooltip title="Descargar el plan en CSV">
           <Button type="text" size="small" icon={<DownloadOutlined />} className="csv-button" onClick={() => exportCsv(allRows, metricas.dia)} />
         </Tooltip>
       </div>
 
-      {view === 'lista' && (
+      <OlibiaModal
+        abierto={olibiaAbierto}
+        filas={olibiaAbierto ? paraOlibia(rows, fijas) : []}
+        dia={metricas.dia}
+        onCerrar={() => setOlibiaAbierto(false)}
+      />
+
+      {view === 'lista' && pendientesTodas && (
+        <Table
+          className="plain-table"
+          size="middle"
+          rowKey={(p) => p.actividad.codigo_bia}
+          columns={backlogColumns}
+          dataSource={pendientesTodas}
+          scroll={{ x: 1260 }}
+          pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
+        />
+      )}
+
+      {view === 'lista' && !pendientesTodas && onSeleccion && (
+        // Quick selection for a batch, among the OTs the filters show (for example, one OR)
+        <div className="list-tools">
+          <span className="list-tools-label">Seleccionar{visibles ? ' de lo filtrado' : ''}:</span>
+          <Button
+            type="link"
+            size="small"
+            onClick={() => onSeleccion(rows.filter((r) => r.decision.situacion === 'pendiente').map((r) => r.key))}
+          >
+            Solo por asignar ({rows.filter((r) => r.decision.situacion === 'pendiente').length})
+          </Button>
+          <Button type="link" size="small" onClick={() => onSeleccion(abiertas.map((r) => r.key))}>
+            Por asignar y asignadas ({abiertas.length})
+          </Button>
+          {seleccion.length > 0 && (
+            <Button type="link" size="small" onClick={() => onSeleccion([])}>Ninguna</Button>
+          )}
+        </div>
+      )}
+
+      {view === 'lista' && !pendientesTodas && (
         <Table
           className="plain-table"
           size="middle"
@@ -368,6 +549,15 @@ const AssignmentResults = ({
           dataSource={rows}
           // Minimum width: "Por qué" takes the rest of the row
           scroll={{ x: 980 }}
+          // Several OTs can be selected to assign them together (the bar at the bottom)
+          rowSelection={onSeleccion ? {
+            selectedRowKeys: seleccion,
+            onChange: onSeleccion,
+            preserveSelectedRowKeys: true,
+            columnWidth: 40,
+            fixed: true,
+            getCheckboxProps: (r) => ({ disabled: Boolean(r.actividad?.cerrada) }),
+          } : undefined}
           pagination={{ pageSize: 30, hideOnSinglePage: true, showSizeChanger: false }}
           expandable={{
             expandedRowRender: (r) => (

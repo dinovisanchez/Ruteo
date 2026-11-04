@@ -13,8 +13,9 @@ import OrContractorsModal, { buildOrRows } from './OrContractorsModal';
 import OtTypesModal from './OtTypesModal';
 import {
   getMetabaseStatus, fetchMetabaseOTs, getAssignmentConfig, saveAssignmentConfig, uploadFile,
-  getOperators, getSheetTechnicians,
+  getOperators, getSheetTechnicians, API_BASE_URL,
 } from '../services/api';
+import { avisoSinBackend } from '../services/backend';
 import { otTypeSettings, normalizeText } from '../services/otTypes';
 import { formatCop } from '../services/format';
 
@@ -87,6 +88,10 @@ const AssignmentPanel = forwardRef(({
   const [typesModalOpen, setTypesModalOpen] = useState(false);
   const [orInfo, setOrInfo] = useState({ operadores: [], resueltos: {} });
   const [hojaTecnicos, setHojaTecnicos] = useState([]);
+  // Changes in the Jornada fields, to know the plan on screen used other settings
+  const [cambiosJornada, setCambiosJornada] = useState(0);
+  // Last automatic or manual read that failed: shown until a read works again
+  const [errorLectura, setErrorLectura] = useState(null);
   const knownRef = useRef(null);
 
   useEffect(() => {
@@ -175,11 +180,23 @@ const AssignmentPanel = forwardRef(({
 
   const cuadrillasManuales = Object.entries(parejas).filter(([a, b]) => a < b).map(([a, b]) => [a, b]);
 
-  const runAssign = async (actividades) => {
-    if (!actividades?.length) return;
-    const values = await form.validateFields();
+  // Everything that changes the plan: when it differs from the one of the plan on screen, it is outdated
+  const firma = JSON.stringify([modo, orFilter, disponibles, cuadrillasManuales, transito, cambiosJornada]);
+
+  // The plan request with the current settings; null (and Ajustes opens) if a field is not valid
+  const armarPedido = async (actividades) => {
+    if (!actividades?.length) return null;
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch (error) {
+      setAbiertas((prev) => (prev.includes('ajustes') ? prev : [...prev, 'ajustes']));
+      message.error('Revisa la jornada en Ajustes: hay un campo vacío o fuera de rango', 6);
+      return null;
+    }
     const tipos = [...new Set(actividades.map((a) => a.servicio))];
-    await onAssign({
+    return {
+      firma,
       modo,
       actividades,
       or_filtro: orFilter,
@@ -194,11 +211,17 @@ const AssignmentPanel = forwardRef(({
         velocidad_promedio_kmh: values.velocidad_promedio_kmh,
         factor_vial: values.factor_vial,
         radio_inhouse_km: values.radio_inhouse_km,
+        radio_grupo_km: values.radio_grupo_km ?? 2,
         capacidad_maxima_actividades: values.capacidad_maxima_actividades || null,
         incluir_retorno: values.incluir_retorno,
         tiempos_servicio: tipos.map((s) => ({ servicio: s, duracion_minutos: otTypeSettings(s, config.tipos_ot).minutos })),
       },
-    });
+    };
+  };
+
+  const runAssign = async (actividades) => {
+    const pedido = await armarPedido(actividades);
+    if (pedido) await onAssign(pedido);
   };
 
   // When the OTs were last read from Metabase, and whether a reading is under way
@@ -221,6 +244,7 @@ const AssignmentPanel = forwardRef(({
       writeKnownOts([...knownRef.current]);
 
       setFetchInfo(data);
+      setErrorLectura(null);
       onOtsLoaded(data.actividades, nuevas, 'Metabase', data.mapeo);
       if (nuevas.size && silent) {
         notification.info({
@@ -231,6 +255,8 @@ const AssignmentPanel = forwardRef(({
       }
       return data.actividades;
     } catch (error) {
+      // The automatic update fails quietly but leaves a notice on screen until a read works
+      setErrorLectura({ mensaje: error.message, hora: dayjs().format('HH:mm') });
       if (!silent) message.error(error.message, 8);
       return null;
     } finally {
@@ -241,7 +267,8 @@ const AssignmentPanel = forwardRef(({
 
   const extractAndRecommend = async (silent) => {
     const actividades = await loadOts(silent);
-    if (actividades?.length) await runAssign(actividades);
+    // The read takes a while: the plan uses the settings as they are now, not as they were when it started
+    if (actividades?.length) await actionsRef.current.assign(actividades);
     else if (actividades && !silent) message.info('La pregunta no devolvió OTs');
   };
 
@@ -251,17 +278,35 @@ const AssignmentPanel = forwardRef(({
     extract: () => extractAndRecommend(false),
     refresh: () => extractAndRecommend(true),
     recalc: () => runAssign(ots),
+    assign: (actividades) => runAssign(actividades),
+    pedido: () => armarPedido(ots),
   };
   useImperativeHandle(ref, () => ({
     extract: () => actionsRef.current.extract(),
     refresh: () => actionsRef.current.refresh(),
     recalc: () => actionsRef.current.recalc(),
+    // The request with the current settings, for recalculating after an edit or a change of day
+    pedido: () => actionsRef.current.pedido(),
+    // From the toolbar: expands a section and scrolls to it (after the panel opens)
+    abrirSeccion: (key) => {
+      setAbiertas((prev) => (prev.includes(key) ? prev : [...prev, key]));
+      // Only the panel scrolls, not the page
+      setTimeout(() => {
+        const titulo = document.getElementById(`seccion-${key}`);
+        const panel = titulo?.closest('.ant-layout-sider');
+        if (!titulo || !panel) return;
+        const arriba = titulo.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop;
+        panel.scrollTo({ top: Math.max(0, arriba - 16), behavior: 'smooth' });
+      }, 250);
+    },
   }), []);
 
   const canExtract = Boolean(status?.configurado && cardId.trim());
   useEffect(() => {
-    onStateChange({ canExtract, fetching, autoRefresh });
-  }, [canExtract, fetching, autoRefresh, onStateChange]);
+    onStateChange({
+      canExtract, fetching, autoRefresh, errorLectura, firma, disponibles: disponiblesKey,
+    });
+  }, [canExtract, fetching, autoRefresh, errorLectura, firma, disponiblesKey, onStateChange]);
 
   useEffect(() => {
     try {
@@ -310,11 +355,12 @@ const AssignmentPanel = forwardRef(({
 
   const handleUpload = async ({ file, onSuccess, onError }) => {
     try {
+      // The file is read like the Metabase question: same columns, same notices
       const data = await uploadFile(file);
-      setFetchInfo(null);
-      onOtsLoaded(data.activities, new Set(), `Archivo ${file.name}`, {});
+      setFetchInfo(data);
+      onOtsLoaded(data.actividades, new Set(), `Archivo ${file.name}`, data.mapeo);
       onSuccess(data);
-      await runAssign(data.activities);
+      await actionsRef.current.assign(data.actividades);
     } catch (error) {
       message.error(`No se pudo leer el archivo: ${error.message}`);
       onError(error);
@@ -496,7 +542,7 @@ const AssignmentPanel = forwardRef(({
           ? 'Carga el plan al abrir la app, cada pocos minutos y al empezar un nuevo día'
           : 'Al empezar un nuevo día solo se recalcula con las OTs ya cargadas'}
       </Text>
-      <Upload accept=".xlsx,.xls,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
+      <Upload accept=".xlsx,.csv" showUploadList={false} customRequest={handleUpload} disabled={busy}>
         <Button type="link" size="small" icon={<UploadOutlined />} style={{ paddingLeft: 0, marginTop: 4 }}>
           o subir un Excel/CSV
         </Button>
@@ -562,12 +608,14 @@ const AssignmentPanel = forwardRef(({
         form={form}
         layout="vertical"
         size="small"
+        onValuesChange={() => setCambiosJornada((n) => n + 1)}
         initialValues={{
           horario_inicio: dayjs('08:00', 'HH:mm'),
           horas_laborales: 8,
           velocidad_promedio_kmh: 30,
           factor_vial: 1.3,
           radio_inhouse_km: 40,
+          radio_grupo_km: 2,
           capacidad_maxima_actividades: null,
           incluir_retorno: true,
         }}
@@ -584,6 +632,13 @@ const AssignmentPanel = forwardRef(({
           </Form.Item>
           <Form.Item label="Volver a la base" name="incluir_retorno" valuePropName="checked">
             <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Distancia «cerca» (km)"
+            name="radio_grupo_km"
+            tooltip="Las OTs a esta distancia o menos por carretera van juntas, y una OT así de cerca de las OTs de un técnico va con él. 0 = no usar"
+          >
+            <InputNumber min={0} max={20} step={0.5} />
           </Form.Item>
           <Form.Item
             label="Radio técnicos (km)"
@@ -623,7 +678,7 @@ const AssignmentPanel = forwardRef(({
           showIcon
           className="ios-alert"
           message="No hay conexión con el backend"
-          description="El backend no está corriendo en http://localhost:8000. Ciérralo todo y ejecuta ./iniciar.sh; si falla, revisa logs/backend-8000.log."
+          description={avisoSinBackend(API_BASE_URL, window.location.origin)}
         />
       )}
       {status && !status.sinBackend && !status.configurado && (
@@ -655,25 +710,25 @@ const AssignmentPanel = forwardRef(({
         items={[
           {
             key: 'tecnicos',
-            label: 'Técnicos',
+            label: <span id="seccion-tecnicos">Técnicos</span>,
             extra: <Text type="secondary">{disponibles.length} de {tecnicosActivos.length} · {dayjs(dia).format('ddd D')}</Text>,
             children: tecnicosSection,
           },
           {
             key: 'contratistas',
-            label: 'Contratistas por OR',
+            label: <span id="seccion-contratistas">Contratistas por OR</span>,
             extra: orRows.length ? <Text type="secondary">{orRows.length} OR</Text> : null,
             children: contratistasSection,
           },
           {
             key: 'tipos',
-            label: 'Tipos de OT',
+            label: <span id="seccion-tipos">Tipos de OT</span>,
             extra: services.length ? <Text type="secondary">{services.length}</Text> : null,
             children: tiposSection,
           },
           {
             key: 'ajustes',
-            label: 'Ajustes',
+            label: <span id="seccion-ajustes">Ajustes</span>,
             forceRender: true,
             children: ajustesSection,
           },

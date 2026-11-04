@@ -87,7 +87,14 @@ async def _consultar(client: httpx.AsyncClient, ruta: str, params: Dict[str, str
         if respuesta.status_code != 200:
             errores.append(f"{servidor}: HTTP {respuesta.status_code}")
             continue
-        datos = respuesta.json()
+        try:
+            datos = respuesta.json()
+        except ValueError:
+            datos = None
+        if not isinstance(datos, dict):
+            # Una página de error en vez de JSON: se prueba el siguiente servidor
+            errores.append(f"{servidor}: respondió algo que no es de OSRM")
+            continue
         if datos.get("code") != "Ok":
             errores.append(f"{servidor}: {datos.get('code')} {datos.get('message', '')}".strip())
             continue

@@ -4,14 +4,14 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from collections import Counter
-from datetime import date
+from functools import lru_cache
 from pathlib import Path
 import csv
 import re
 from typing import Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from shared.catalogo import cargar_catalogo, nombre_empresa, normalizar_texto
@@ -32,8 +32,9 @@ from shared.models import (
     Tecnico,
     ZonaTransito,
 )
-from shared.utils import setup_logging
+from shared.utils import hoy as hoy_en_colombia, setup_logging
 from . import metabase
+from .archivo import ArchivoError, leer_filas
 from .geocoding import geocodificar
 from . import trazado
 
@@ -125,7 +126,7 @@ def conteo_por_or(actividades: List[Activity]) -> Dict[str, int]:
 
 
 class OTsResponse(BaseModel):
-    card_id: str
+    card_id: Optional[str] = None  # Vacío cuando las OTs vienen de un archivo
     total_filas: int
     actividades: List[Activity]
     columnas: List[str]
@@ -197,33 +198,55 @@ SEPARADOR_PERSONAS = re.compile(r"[,;|/\n\[\]\"]+| y ", flags=re.IGNORECASE)
 def tecnicos_mencionados(texto: Optional[str], tecnicos: List[Tecnico]) -> List[Tecnico]:
     """Técnicos de la app que aparecen en "Electricistas asignados" de Metabase.
 
-    Cada persona del texto ("CARLOS ANDRÉS SALAS, Juan Reyes") coincide con el técnico
-    cuyas palabras del nombre están todas en ella, sin importar mayúsculas, tildes ni una
-    letra distinta en el apellido.
+    Cada persona del texto ("CARLOS ANDRÉS SALAS, Juan Reyes") coincide con el técnico cuyas
+    palabras del nombre están todas en ella, sin importar mayúsculas ni tildes. El nombre de pila
+    tiene que sonar igual (Daniel no es Daniela, Mario no es María); en los apellidos se acepta una
+    letra distinta ("Gelver" / "Gelvez").
     """
-    encontrados: List[Tecnico] = []
-    for persona in SEPARADOR_PERSONAS.split(texto or ""):
+    return [tecnicos[i] for i in _mencionados(texto or "", tuple(t.nombre for t in tecnicos))]
+
+
+@lru_cache(maxsize=8192)
+def _mencionados(texto: str, nombres: Tuple[str, ...]) -> Tuple[int, ...]:
+    """Índices de `nombres` que aparecen en `texto`; los nombres se repiten mucho, así que se guardan"""
+    encontrados: List[int] = []
+    for persona in SEPARADOR_PERSONAS.split(texto):
         palabras = clave(persona).split()
         if not palabras:
             continue
-        for tecnico in tecnicos:
-            nombre = clave(tecnico.nombre).split()
+        for indice, nombre_tecnico in enumerate(nombres):
+            nombre = clave(nombre_tecnico).split()
             if (
-                nombre and tecnico not in encontrados
-                and all(any(_parecidas(n, p) for p in palabras) for n in nombre)
+                nombre and indice not in encontrados
+                and any(_como_suena(nombre[0]) == _como_suena(p) for p in palabras)
+                and all(any(_parecidas(n, p) for p in palabras) for n in nombre[1:])
             ):
-                encontrados.append(tecnico)
-    return encontrados
+                encontrados.append(indice)
+    return tuple(encontrados)
+
+
+def _personas_de_bia(actividad: Activity) -> bool:
+    """Las personas de la OT pueden ser técnicos de Bia: su contratista es Bia o no viene.
+
+    Si la OT es de un contratista, sus electricistas son del contratista aunque se llamen parecido
+    a alguien de Bia.
+    """
+    return not (actividad.contratista_asignado or "").strip() or es_de_bia(actividad.contratista_asignado)
 
 
 def aprender_ids(actividades: List[Activity], config: AsignacionConfig) -> Dict[str, str]:
-    """Id del electricista en Olibia → técnico, aprendido de las OTs con un solo electricista reconocido.
+    """Id del electricista en Olibia → técnico, aprendido de las OTs de Bia con un solo electricista reconocido.
 
-    Se guarda en la configuración para usarlo en las OTs que listan a varias personas.
+    Se guarda en la configuración para usarlo en las OTs que listan a varias personas. Si una OT
+    nueva contradice lo guardado, manda la OT; los ids que aparecen en OTs de contratistas no son
+    de técnicos de Bia y se borran.
     """
     ids = dict(config.ids_electricistas)
     for actividad in actividades:
-        if not actividad.electricista_id or actividad.electricista_id in ids:
+        if not actividad.electricista_id:
+            continue
+        if not _personas_de_bia(actividad):
+            ids.pop(actividad.electricista_id, None)
             continue
         personas = [p for p in SEPARADOR_PERSONAS.split(actividad.asignado_a or "") if clave(p)]
         mencionados = tecnicos_mencionados(actividad.asignado_a, config.tecnicos)
@@ -236,14 +259,18 @@ def aprender_ids(actividades: List[Activity], config: AsignacionConfig) -> Dict[
 
 
 def responsables(actividad: Activity, tecnicos: List[Tecnico], ids: Dict[str, str]) -> List[Tecnico]:
-    """Técnicos que hacen la OT: el de "Id electricista" primero y solo tantos como pide su tipo.
+    """Técnicos de Bia que hacen la OT: el de "Id electricista" primero y solo tantos como pide su tipo.
 
     "Electricistas asignados" puede traer a más personas de las que fueron (por ejemplo, tras una
-    reasignación); así una OT de 1 persona no se le cuenta a dos técnicos.
+    reasignación); así una OT de 1 persona no se le cuenta a dos técnicos. Las OTs de contratistas
+    no son de ningún técnico de Bia.
     """
+    if not _personas_de_bia(actividad):
+        return []
     mencionados = tecnicos_mencionados(actividad.asignado_a, tecnicos)
     principal = next((t for t in tecnicos if t.id == ids.get(actividad.electricista_id or "")), None)
-    if principal:
+    # El id solo ordena a los que ya nombra la OT, o ubica a quien no se reconoce por el nombre
+    if principal and (not mencionados or principal in mencionados):
         mencionados = [principal] + [t for t in mencionados if t.id != principal.id]
     return mencionados[:max(1, actividad.personas_requeridas)]
 
@@ -278,9 +305,9 @@ def plan_del_dia(
 ) -> Tuple[List[Activity], Dict[str, str], Dict[str, str], Dict[str, str], List[List[str]], Dict]:
     """OTs del día y a quién quedan fijadas.
 
-    Entran las asignadas en Metabase para `dia` y las pendientes de ese día: una pendiente con
-    fecha de visita entra ese día (o hoy, si la fecha ya pasó y sigue pendiente); sin fecha,
-    entra hoy o cualquier día futuro. Una asignada queda
+    Entran las OTs con fecha de visita `dia`, asignadas o pendientes, igual que en Olibia. Solo
+    el plan de hoy suma además las pendientes sin fecha, para que no queden sin planear. Las
+    pendientes vencidas (su fecha ya pasó) no aplican: no entran en ningún plan. Una asignada queda
     fijada a su técnico si está disponible (si no, la app la reasigna), a su contratista
     si está en el catálogo, o como externa si su responsable no está en la app. Las
     ediciones a mano mandan sobre lo que dice Metabase.
@@ -294,8 +321,8 @@ def plan_del_dia(
     notas: Dict[str, str] = {}
     parejas: List[List[str]] = []
     sin_registrar: Dict[str, int] = {}
-    otros_dias = sin_fecha = pendientes_otros_dias = 0
-    hoy = date.today().isoformat()
+    otros_dias = sin_fecha = pendientes_otros_dias = vencidas = 0
+    hoy = hoy_en_colombia().isoformat()
 
     for actividad in actividades:
         codigo = actividad.codigo_bia
@@ -306,17 +333,20 @@ def plan_del_dia(
             else:
                 sin_fecha += 1
             continue
+        if actividad.situacion == "pendiente" and fecha and fecha < hoy:
+            # Vencida: su fecha ya pasó y no aplica, ni hoy ni al consultar ese día
+            vencidas += 1
+            continue
         if actividad.situacion == "pendiente" and fecha != dia:
-            # Sin fecha: hoy o un día futuro (no se puede hacer en el pasado); con fecha: ese día,
-            # o hoy si la fecha ya pasó y sigue pendiente
-            if (not fecha and dia < hoy) or (fecha and not (fecha < hoy and dia == hoy)):
+            # Otro día solo muestra lo que tiene esa fecha; hoy suma además las sin fecha
+            if dia != hoy or fecha:
                 pendientes_otros_dias += 1
                 continue
-            if fecha:
-                notas[codigo] = f"Pendiente desde el {fecha}"
+            notas[codigo] = "Pendiente sin fecha de visita"
         del_dia.append(actividad)
 
-        edicion = ediciones.get(codigo)
+        # Una visita cerrada ya se hizo: no se edita ni se vuelve a mandar
+        edicion = None if actividad.cerrada else ediciones.get(codigo)
         if edicion and edicion != "auto":
             fijas[codigo] = edicion
             if edicion != "contratista":
@@ -339,7 +369,11 @@ def plan_del_dia(
                     parejas.append([t.id for t in en_turno[:2]])
             else:
                 nombres = ", ".join(t.nombre for t in mencionados)
-                notas[codigo] = f"Estaba asignada a {nombres}, que no está disponible; la app la reasigna"
+                if actividad.cerrada:
+                    externas[codigo] = f"{nombres} (cerrada)"
+                    notas[codigo] = f"Cerrada por {nombres}, que no está disponible hoy: no se reasigna"
+                else:
+                    notas[codigo] = f"Estaba asignada a {nombres}, que no está disponible; la app la reasigna"
             continue
         empresa = empresa_mencionada(actividad.contratista_asignado, sedes)
         if empresa:
@@ -359,6 +393,7 @@ def plan_del_dia(
         "ots_otros_dias": otros_dias,
         "asignadas_sin_fecha": sin_fecha,
         "pendientes_otros_dias": pendientes_otros_dias,
+        "pendientes_vencidas": vencidas,
         "bia_sin_registrar": sorted(sin_registrar),
     }
     return del_dia, fijas, externas, notas, parejas, metricas
@@ -400,6 +435,40 @@ async def metabase_ots(card_id: Optional[str] = None):
         total_filas=len(filas),
         actividades=actividades,
         columnas=list(filas[0].keys()) if filas else [],
+        mapeo=mapeo,
+        ors=conteo_por_or(actividades),
+        geocodificadas=geocodificadas,
+        sin_coordenadas=sum(1 for a in actividades if a.coordinates is None),
+        avisos=avisos + avisos_geo,
+    )
+
+
+@router.post("/upload", response_model=OTsResponse)
+async def subir_archivo(file: UploadFile = File(...)):
+    """
+    OTs desde un Excel (.xlsx) o CSV: se leen con las mismas columnas que la pregunta de Metabase
+    (Bia Code, OR, Dirección, Ciudad, Situación, Fecha de la visita...) y las que no traen GPS se
+    geocodifican. El archivo no se guarda.
+    """
+    contenido = await file.read(settings.MAX_UPLOAD_SIZE + 1)
+    if len(contenido) > settings.MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"El archivo pasa de {settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB",
+        )
+    try:
+        filas = leer_filas(file.filename or "", contenido)
+        actividades, mapeo, avisos = metabase.filas_a_actividades(filas)
+    except (ArchivoError, metabase.MetabaseError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not actividades:
+        raise HTTPException(status_code=422, detail="El archivo no tiene OTs con código")
+    geocodificadas, avisos_geo = await geocodificar(actividades)
+    logger.info(f"Archivo {file.filename}: {len(filas)} filas, {len(actividades)} OTs, {geocodificadas} geocodificadas")
+    return OTsResponse(
+        total_filas=len(filas),
+        actividades=actividades,
+        columnas=list(filas[0].keys()),
         mapeo=mapeo,
         ors=conteo_por_or(actividades),
         geocodificadas=geocodificadas,
@@ -480,7 +549,18 @@ async def obtener_config():
 
 @router.put("/asignacion/config", response_model=AsignacionConfig)
 async def actualizar_config(config: AsignacionConfig):
-    """Guarda técnicos in-house y contratistas por OR"""
+    """Guarda técnicos in-house y contratistas por OR.
+
+    Si otra persona guardó desde que esta abrió la configuración (`version` vieja), se rechaza en vez
+    de borrar sus cambios. Lo que la app aprende sola (ids de electricistas, técnicos de la hoja) se
+    toma de lo guardado, no de lo que manda el navegador.
+    """
+    guardada = leer_config()
+    if config.version != guardada.version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Otra persona cambió la configuración mientras la tenías abierta: recarga la página y vuelve a hacer tu cambio",
+        )
     sedes = {s.id for s in obtener_catalogo()["sedes"]}
     empresas = {s.empresa_id for s in obtener_catalogo()["sedes"] if s.tipo == "contratista"}
     if config.card_id is not None:
@@ -508,18 +588,26 @@ async def actualizar_config(config: AsignacionConfig):
             )
     # Se descartan los OR sin contratistas para que usen la regla "el más cercano de todos"
     config.or_contratistas = {k.strip(): v for k, v in config.or_contratistas.items() if k.strip() and v}
+    config.ids_electricistas = guardada.ids_electricistas
+    config.hoja_importados = guardada.hoja_importados
+    config.version = guardada.version + 1
     guardar_config(config)
     return config
 
 
-@router.post("/asignar", response_model=AssignmentResult)
-async def asignar(request: AsignarRequest):
-    """
-    Plan del día: toma las OTs pendientes y las ya asignadas para ese día (filtradas por OR)
-    y decide a quién enviar cada una:
-    - las asignadas se quedan con su técnico o contratista (si el técnico no está
-      disponible, se reasignan); las ediciones a mano mandan sobre Metabase
-    - las pendientes van a los técnicos disponibles o al contratista más cercano de su OR
+class LoteRequest(AsignarRequest):
+    # OTs elegidas para asignar juntas
+    codigos: List[str]
+    # OT → cuadrilla ("t1+t2") en el plan que se está viendo: lo que cada técnico ya tiene ese día
+    plan_actual: Dict[str, str] = Field(default_factory=dict)
+
+
+async def _pedido_del_dia(
+    request: AsignarRequest,
+) -> Tuple[AssignmentRequest, Dict, JornadaConfig, List[List[float]], Optional[MatrizVial], Optional[str]]:
+    """Arma el pedido al optimizador para el día: OTs del día, fijadas, cuadrillas, coberturas y tiempos.
+
+    Devuelve (pedido, métricas del día, jornada, puntos, matriz por vías, aviso si no hay vías).
     """
     filtro = {normalizar_texto(o) for o in request.or_filtro}
     actividades = [a for a in request.actividades if not filtro or normalizar_texto(a.or_operador) in filtro]
@@ -539,7 +627,7 @@ async def asignar(request: AsignarRequest):
     for actividad in actividades:
         actividad.personas_requeridas = max(1, personas.get(normalizar_texto(actividad.servicio), 1))
 
-    dia = request.dia or date.today().isoformat()
+    dia = request.dia or hoy_en_colombia().isoformat()
     actividades, fijas, externas, notas, parejas, metricas_dia = plan_del_dia(
         actividades, dia, request.fijas, config.tecnicos, tecnicos, sedes, aprender_ids(actividades, config)
     )
@@ -593,17 +681,41 @@ async def asignar(request: AsignarRequest):
         disponible_previo=request.disponible_previo,
         jornada=jornada,
     )
+    return pedido, metricas_dia, jornada, puntos, matriz, aviso_vias
+
+
+async def _al_optimizador(ruta: str, cuerpo: Dict) -> Dict:
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
-            respuesta = await client.post(
-                f"{settings.OPTIMIZER_SERVICE_URL}/assign",
-                json=pedido.model_dump(mode="json"),
-            )
+            respuesta = await client.post(f"{settings.OPTIMIZER_SERVICE_URL}{ruta}", json=cuerpo)
     except httpx.RequestError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Optimizer service unavailable: {e}")
+    try:
+        datos = respuesta.json()
+    except ValueError:
+        datos = None
     if respuesta.status_code != 200:
-        raise HTTPException(status_code=respuesta.status_code, detail=respuesta.json().get("detail", respuesta.text))
-    resultado = AssignmentResult(**respuesta.json())
+        detalle = datos.get("detail") if isinstance(datos, dict) else None
+        raise HTTPException(
+            status_code=respuesta.status_code if 400 <= respuesta.status_code < 600 else status.HTTP_502_BAD_GATEWAY,
+            detail=detalle or respuesta.text[:300] or f"El optimizador respondió HTTP {respuesta.status_code}",
+        )
+    if not isinstance(datos, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="El optimizador respondió algo que no es JSON")
+    return datos
+
+
+@router.post("/asignar", response_model=AssignmentResult)
+async def asignar(request: AsignarRequest):
+    """
+    Plan del día: toma las OTs pendientes y las ya asignadas para ese día (filtradas por OR)
+    y decide a quién enviar cada una:
+    - las asignadas se quedan con su técnico o contratista (si el técnico no está
+      disponible, se reasignan); las ediciones a mano mandan sobre Metabase
+    - las pendientes van a los técnicos disponibles o al contratista más cercano de su OR
+    """
+    pedido, metricas_dia, jornada, puntos, matriz, aviso_vias = await _pedido_del_dia(request)
+    resultado = AssignmentResult(**await _al_optimizador("/assign", pedido.model_dump(mode="json")))
     resultado.metricas.update(metricas_dia)
     resultado.metricas["tiempos_por_vias"] = matriz is not None
     resultado.metricas["aviso_vias"] = aviso_vias
@@ -612,7 +724,31 @@ async def asignar(request: AsignarRequest):
     ]
     # El mapa pide estas mismas rutas; se trazan ya para que estén listas al abrirlo
     trazado.precargar([puntos_ruta(r, jornada.incluir_retorno) for r in resultado.rutas])
+    # Para medir después cuántas sugerencias quedaron así en Metabase
+    from .resultados import registrar
+    try:
+        registrar(resultado.metricas["dia"], resultado.decisiones, request.fijas)
+    except OSError as e:
+        logger.warning(f"No se pudieron guardar las sugerencias: {e}")
     return resultado
+
+
+@router.post("/asignar/lote", response_model=dict)
+async def asignar_lote(request: LoteRequest):
+    """
+    Propuesta para asignar varias OTs juntas: las que están cerca entre sí (radio_grupo_km,
+    2 km por defecto) forman un grupo y cada grupo va al técnico disponible de su equipo con
+    la UTR más baja de la semana. No cambia nada: la app aplica la propuesta como ediciones.
+    """
+    # Las visitas cerradas ya se hicieron: no entran en un lote
+    cerradas = {a.codigo_bia for a in request.actividades if a.cerrada}
+    codigos = [c for c in request.codigos if c not in cerradas]
+    if not codigos:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Elige al menos una OT que no esté cerrada")
+    pedido, _, _, _, _, _ = await _pedido_del_dia(request)
+    return await _al_optimizador("/lote", {
+        "pedido": pedido.model_dump(mode="json"), "codigos": codigos, "plan_actual": request.plan_actual,
+    })
 
 
 def puntos_ruta(asignada, incluir_retorno: bool) -> List[List[float]]:

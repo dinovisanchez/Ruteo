@@ -1,7 +1,8 @@
 import axios from 'axios';
+import { avisarSesionVencida, sesionActual } from './sesion';
 
-// API base URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+// API base URL: on the Mac, the local backend; on a server (Vercel), REACT_APP_API_URL when building
+export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 // Create axios instance with default config
 const apiClient = axios.create({
@@ -12,10 +13,12 @@ const apiClient = axios.create({
   },
 });
 
-// Request interceptor for logging
+// Request interceptor for logging and the session
 apiClient.interceptors.request.use(
   (config) => {
     console.log(`API Request: ${config.method.toUpperCase()} ${config.url}`);
+    const actual = sesionActual();
+    if (actual) config.headers.Authorization = `Bearer ${actual.token}`;
     return config;
   },
   (error) => {
@@ -34,11 +37,16 @@ apiClient.interceptors.response.use(
     console.error('Response error:', error);
 
     // Extract error message
-    let errorMessage = 'An error occurred';
+    let errorMessage = 'Ocurrió un error';
+    if (error.response?.status === 401) avisarSesionVencida();
     if (error.response) {
-      errorMessage = error.response.data?.detail || error.response.statusText;
+      const detalle = error.response.data?.detail;
+      // A request the backend rejects as invalid lists each field with its problem
+      errorMessage = Array.isArray(detalle)
+        ? detalle.map((d) => d.msg || JSON.stringify(d)).join('; ')
+        : detalle || error.response.statusText || `HTTP ${error.response.status}`;
     } else if (error.request) {
-      errorMessage = 'No response from server';
+      errorMessage = 'El backend no respondió (¿está corriendo ./iniciar.sh?)';
     } else {
       errorMessage = error.message;
     }
@@ -52,7 +60,7 @@ apiClient.interceptors.response.use(
 /**
  * Upload activity file
  * @param {File} file - Excel or CSV file
- * @returns {Promise<Object>} Upload result with activities
+ * @returns {Promise<Object>} The OTs, read with the same columns as the Metabase question
  */
 export const uploadFile = async (file) => {
   const formData = new FormData();
@@ -64,6 +72,15 @@ export const uploadFile = async (file) => {
     },
   });
 
+  return response.data;
+};
+
+/**
+ * Whether the server asks for «Iniciar sesión con Google» and with which Google app
+ * @returns {Promise<Object>} { google_client_id, dominios }
+ */
+export const getAuthConfig = async () => {
+  const response = await apiClient.get('/auth/config');
   return response.data;
 };
 
@@ -128,6 +145,18 @@ export const assignActivities = async (request) => {
 };
 
 /**
+ * Proposal for assigning several OTs together: the ones close to each other form a group and each
+ * group goes to the available technician of its team with the lowest UTR of the week
+ * @param {Object} request - same as assignActivities, plus `codigos` (the selected OTs)
+ * @returns {Promise<Object>} { radio_km, grupos: [{ codigos, tecnico_id, tecnico, minutos, km_max,
+ *   personas, cabe, utr_antes, utr_despues, opciones }], sin_tecnico: [{ codigo, motivo }], sin_ubicacion }
+ */
+export const proposeBatch = async (request) => {
+  const response = await apiClient.post('/asignar/lote', request);
+  return response.data;
+};
+
+/**
  * Network operators (OR) with the departments they serve and the contractors based there
  * @param {string[]} nombres - OR names as they appear in the OTs, to match them to the catalog
  * @returns {Promise<Object>} { operadores: [{ nombre, departamentos, notas, empresas_auto }], resueltos }
@@ -165,6 +194,16 @@ export const getZones = async () => {
  */
 export const getUtilization = async (request) => {
   const response = await apiClient.post('/utilizacion', request);
+  return response.data;
+};
+
+/**
+ * What Ruteo suggested between two days and how it ended up in Metabase
+ * @param {Object} request - { actividades, desde, hasta }
+ * @returns {Promise<Object>} { total, por_destino, por_dia, cambiadas }
+ */
+export const getResults = async (request) => {
+  const response = await apiClient.post('/resultados', request);
   return response.data;
 };
 

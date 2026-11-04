@@ -1,7 +1,10 @@
 import React, { useMemo } from 'react';
-import { Card, Table, Tooltip, Typography } from 'antd';
+import {
+  Card, Empty, Table, Tooltip, Typography,
+} from 'antd';
 import dayjs from 'dayjs';
 import { otTypeSettings } from '../services/otTypes';
+import { columnaCerca } from './AsignadasCerca';
 
 const { Text } = Typography;
 
@@ -20,7 +23,9 @@ const columnFilters = (ots, getter) => [...new Set(ots.map(getter))]
   .sort()
   .map((v) => ({ text: v, value: v }));
 
-const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
+const OtsTable = ({
+  ots, nuevas, mapeo, config, title, enPlan = null, enPlanTitulo = 'En el plan', cercanas = null, radioCerca = 2,
+}) => {
   // Extra columns: everything Metabase sent that is not already shown as a main column
   const extraKeys = useMemo(() => {
     const mapped = new Set(Object.values(mapeo || {}));
@@ -31,7 +36,13 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
     return keys;
   }, [ots, mapeo]);
 
-  if (!ots?.length) return null;
+  if (!ots?.length) {
+    return (
+      <Card title={title} style={{ marginBottom: 16 }}>
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No hay OTs con estos filtros" />
+      </Card>
+    );
+  }
 
   const columns = [
     {
@@ -59,6 +70,22 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
         </span>
       ),
     },
+    // With every loaded OT: whether it is in the plan of the day and, if not, why
+    ...(enPlan ? [{
+      title: enPlanTitulo,
+      width: 300,
+      filters: [{ text: 'En el plan', value: 'si' }, { text: 'Fuera del plan', value: 'no' }],
+      onFilter: (value, a) => (value === 'si') === Boolean(enPlan[a.codigo_bia]?.dentro),
+      sorter: (a, b) => Number(Boolean(enPlan[b.codigo_bia]?.dentro)) - Number(Boolean(enPlan[a.codigo_bia]?.dentro)),
+      render: (_, a) => (
+        <span className="state">
+          <span className="dot" style={{ background: enPlan[a.codigo_bia]?.dentro ? '#007AFF' : '#C7C7CC' }} />
+          {enPlan[a.codigo_bia]?.texto}
+        </span>
+      ),
+    }] : []),
+    // With the pending OTs: the assigned ones near each of them
+    ...(cercanas ? [columnaCerca(cercanas, radioCerca, (a) => a)] : []),
     {
       title: 'Fecha visita',
       dataIndex: 'fecha_visita',
@@ -73,6 +100,15 @@ const OtsTable = ({ ots, nuevas, mapeo, config, title }) => {
       width: 220,
       ellipsis: true,
       render: (_, a) => [a.asignado_a, a.contratista_asignado].filter(Boolean).join(' · '),
+    },
+    {
+      title: 'Creada por',
+      width: 190,
+      ellipsis: true,
+      sorter: (a, b) => (a.creado_por || '~').localeCompare(b.creado_por || '~'),
+      filters: columnFilters(ots, (a) => a.creado_por),
+      onFilter: (value, a) => a.creado_por === value,
+      render: (_, a) => [a.creado_por, a.fecha_creacion && dayjs(a.fecha_creacion).format('D MMM')].filter(Boolean).join(' · '),
     },
     {
       title: 'OR',

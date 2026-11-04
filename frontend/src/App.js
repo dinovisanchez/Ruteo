@@ -3,17 +3,26 @@ import {
   Layout, Space, Spin, message, Alert, Button, DatePicker, Segmented, Tooltip, Input, Select,
 } from 'antd';
 import {
-  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined,
+  LeftOutlined, RightOutlined, UndoOutlined, ReloadOutlined, SearchOutlined, MenuFoldOutlined, MenuUnfoldOutlined,
+  TeamOutlined, ShopOutlined, AppstoreOutlined, SettingOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
 import AssignmentPanel from './components/AssignmentPanel';
 import AssignmentResults from './components/AssignmentResults';
+import { useSesion } from './components/Acceso';
+import LoteBar, { POR_CERCANIA } from './components/LoteBar';
+import LoteModal from './components/LoteModal';
 import OtsTable from './components/OtsTable';
+import ResultsDashboard from './components/ResultsDashboard';
 import UtilizationDashboard from './components/UtilizationDashboard';
 import {
-  assignActivities, getCatalog, getUtilization, getZones,
+  assignActivities, getCatalog, getOperators, getUtilization, getZones, proposeBatch,
 } from './services/api';
+import { asignadasCerca } from './services/cercania';
+import {
+  GRUPOS_PENDIENTES, entraEnElDia, esCerrada, estaVencida, firmaOts, grupoPendiente, matchesAssignee, restaurar,
+} from './services/plan';
 import { matrizPorVias } from './services/osrm';
 import { normalizeText } from './services/otTypes';
 
@@ -21,26 +30,55 @@ import './App.css';
 
 const { Header, Content, Sider } = Layout;
 
-const codesKey = (ots) => ots.map((a) => a.codigo_bia).sort().join('|');
-
-/**
- * Whether an OT belongs to the plan of `dia`: assigned ones on their visit date; pending ones on their
- * visit date too (or today, if that date already passed and it is still pending); undated pending ones
- * today or any future day (past days only show what happened). Assigned without a date also travel,
- * so the server can report them.
- */
-const entraEnElDia = (a, dia, hoy) => {
-  if (a.fecha_visita === dia) return true;
-  if (!a.fecha_visita) return a.situacion === 'asignada' || dia >= hoy;
-  return a.situacion === 'pendiente' && a.fecha_visita < hoy && dia === hoy;
+// Whether the panel is shown: remembered in this browser; the first time, open on wide screens
+const PANEL_KEY = 'ruteo_panel_abierto';
+// The OR filter chosen, remembered in this browser
+const OR_KEY = 'ruteo_filtro_or';
+const leerPanel = () => {
+  try {
+    const guardado = localStorage.getItem(PANEL_KEY);
+    if (guardado !== null) return guardado === '1';
+  } catch (error) {
+    // Without storage it uses the screen width
+  }
+  return window.innerWidth >= 992;
 };
+
+// Sections of the panel the toolbar opens directly
+const SECCIONES_PANEL = [
+  { key: 'tecnicos', label: 'Técnicos', icon: <TeamOutlined /> },
+  { key: 'contratistas', label: 'Contratistas por OR', icon: <ShopOutlined /> },
+  { key: 'tipos', label: 'Tipos de OT', icon: <AppstoreOutlined /> },
+  { key: 'ajustes', label: 'Ajustes', icon: <SettingOutlined /> },
+];
+
+// Why a loaded OT is or is not in the plan of `dia`, for the full table
+const DESTINO_TEXTO = {
+  tecnico: 'técnico Bia', contratista: 'contratista', externo: 'externo', sin_asignar: 'sin asignar',
+};
+const enElPlan = (a, { decision, dia, hoy, filtroOr, calculadas, cerrada }) => {
+  const fecha = a.fecha_visita ? dayjs(a.fecha_visita).format('D MMM') : null;
+  if (decision) return { dentro: true, texto: `Sí · a ${DESTINO_TEXTO[decision.enviar_a]}` };
+  if (calculadas && !calculadas.has(a.codigo_bia)) return { dentro: false, texto: 'Llegó después del último cálculo: recalcula (↻)' };
+  if (filtroOr.length && !filtroOr.includes(normalizeText(a.or_operador))) return { dentro: false, texto: 'Su OR no está en el filtro de Ajustes' };
+  if (a.situacion === 'asignada') {
+    if (!a.fecha_visita) return { dentro: false, texto: 'Asignada sin fecha de visita en Metabase' };
+    if (cerrada) return { dentro: false, texto: `Cerrada el ${fecha}: cuenta para la utilización` };
+    return { dentro: false, texto: `Asignada para el ${fecha}` };
+  }
+  if (!a.fecha_visita) return { dentro: false, texto: 'Pendiente sin fecha: entra en el plan de hoy' };
+  if (a.fecha_visita < hoy) return { dentro: false, texto: `Vencida (era el ${fecha}): no aplica` };
+  if (a.fecha_visita !== dia) return { dentro: false, texto: `Pendiente para el ${fecha}` };
+  return { dentro: false, texto: 'No entró en el plan' };
+};
+
 const ISO_DAY = 'YYYY-MM-DD';
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 // Everything the name search looks at
 const searchText = (codigo, actividad, responsable) => normalizeText([
   codigo, actividad?.nombre, actividad?.direccion, actividad?.ciudad, actividad?.servicio, actividad?.or_operador,
-  responsable, actividad?.asignado_a, actividad?.contratista_asignado,
+  responsable, actividad?.asignado_a, actividad?.contratista_asignado, actividad?.creado_por,
 ].filter(Boolean).join(' '));
 
 // "Asignado a" options: every Bia technician, plus the contractors and externals with OTs in the plan
@@ -63,15 +101,6 @@ const assigneeOptions = (result, tecnicosApp) => {
   return grupos.filter((g) => g.options.length);
 };
 
-// Several people can be selected: the OT matches if it goes to any of them
-const matchesAssignee = (decision, values) => !values.length || values.some((value) => {
-  if (value === 'sin') return decision.enviar_a === 'sin_asignar';
-  const nombre = value.slice(2);
-  if (value.startsWith('t:')) return decision.enviar_a === 'tecnico' && (decision.responsable || '').split(' + ').includes(nombre);
-  if (value.startsWith('c:')) return decision.enviar_a === 'contratista' && (decision.responsable || '').startsWith(`${nombre} (`);
-  return decision.enviar_a === 'externo' && decision.responsable === nombre;
-});
-
 /**
  * Today's date. It is checked every minute and when coming back to the tab, so it changes by
  * itself at midnight and when the computer wakes up on another day.
@@ -93,7 +122,7 @@ const useHoy = () => {
 
 function App() {
   const [loading, setLoading] = useState(false);
-  const [siderCollapsed, setSiderCollapsed] = useState(false);
+  const [panelAbierto, setPanelAbierto] = useState(leerPanel);
   const [ots, setOts] = useState(null);
   const [nuevas, setNuevas] = useState(new Set());
   const [source, setSource] = useState('');
@@ -105,12 +134,35 @@ function App() {
   const [catalog, setCatalog] = useState({ sedes: [], empresas: [], avisos: [] });
   const [zonas, setZonas] = useState({ equipos: [], transito: [] });
   const hoy = useHoy();
+  // On a shared server: who is signed in, to show it with «Salir»
+  const sesion = useSesion();
   const [dia, setDia] = useState(hoy);
   const [vista, setVista] = useState('lista');
-  // Filters: name search, status and who it is assigned to (the date is the plan day)
+  // The plan on screen is always the one of the chosen day: while another day is being calculated
+  // (or if it failed) nothing of the previous day is shown
+  const plan = result && result.metricas?.dia === dia ? result : null;
+  // Filters: name search, status and who it is assigned to (the date is the plan day). The status
+  // "backlog" is everything left to assign, whatever its date
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('todas');
   const [asignadoA, setAsignadoA] = useState([]);
+  // Network operators (OR) to show; empty = all. It only filters what is shown, not the plan
+  const [ors, setOrs] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(OR_KEY) || '[]');
+    } catch (error) {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(OR_KEY, JSON.stringify(ors));
+    } catch (error) {
+      // Without storage it is not remembered
+    }
+  }, [ors]);
+  // Full table: the OTs of the day's plan, or every OT loaded from Metabase
+  const [alcanceTabla, setAlcanceTabla] = useState('dia');
   // Weekly hours of a technician and working days, for utilization (UTR)
   const [capacidad, setCapacidad] = useState({ horasSemana: 42, diasSemana: 5 });
   // UTR of each technician in the week before the plan day (technician id → 0..1), to show when editing
@@ -119,11 +171,36 @@ function App() {
   const [destino, setDestino] = useState(null);
   // Manual edits: OT → "tecnico:<id>", "empresa:<id>", "contratista" or "auto"
   const [fijas, setFijas] = useState({});
-  const [panelState, setPanelState] = useState({ canExtract: false, fetching: false, autoRefresh: false });
+  const [panelState, setPanelState] = useState({
+    canExtract: false, fetching: false, autoRefresh: false, errorLectura: null, firma: null, disponibles: null,
+  });
+  // OTs selected in the list to assign together, and the proposal "by proximity" for them
+  const [seleccion, setSeleccion] = useState([]);
+  const [propuesta, setPropuesta] = useState(null);
+  const [loteOcupado, setLoteOcupado] = useState(false);
   const [actualizado, setActualizado] = useState(null);
+  // Day for which there are no OTs at all (nothing dated that day): it is not an error
+  const [diaVacio, setDiaVacio] = useState(null);
   const panelRef = useRef(null);
   // Last request built by the panel, to recalculate when the day or an edit changes
   const baseRef = useRef(null);
+  // Exactly what was sent for the current plan (week load, road times...), for the batch proposal
+  const ultimoPedidoRef = useRef(null);
+  // Number of the latest plan request: an answer to an older one (another day, earlier edits) is dropped
+  const turnoRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_KEY, panelAbierto ? '1' : '0');
+    } catch (error) {
+      // Without storage it is not remembered
+    }
+  }, [panelAbierto]);
+
+  const abrirSeccion = (key) => {
+    setPanelAbierto(true);
+    panelRef.current?.abrirSeccion(key);
+  };
 
   useEffect(() => {
     getCatalog().then(setCatalog).catch((e) => message.error(`No se pudo leer el catálogo: ${e.message}`));
@@ -138,13 +215,22 @@ function App() {
     setActualizado(dayjs());
   }, []);
 
+  /**
+   * Calculates the plan of a day. Only the latest request counts: if another one starts meanwhile
+   * (another day, another edit, the automatic update), this answer is dropped. Returns "ok", "error"
+   * or "reemplazado".
+   */
   const handleAssign = useCallback(async (base, overrides = {}) => {
+    turnoRef.current += 1;
+    const turno = turnoRef.current;
+    const vigente = () => turno === turnoRef.current;
     baseRef.current = base;
     const diaPlan = overrides.dia ?? dia;
+    const { firma, ...ajustes } = base;
     // Only the OTs of the plan travel to the server: pending ones and those assigned for that day
     // (the history used for utilization stays in the browser)
     const request = {
-      ...base,
+      ...ajustes,
       actividades: base.actividades.filter((a) => entraEnElDia(a, diaPlan, hoy)),
       dia: diaPlan,
       fijas: overrides.fijas ?? fijas,
@@ -168,15 +254,18 @@ function App() {
           });
           request.uso_previo = Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.usado_min]));
           request.disponible_previo = semana.tecnicos[0]?.disponible_min || 0;
-          setUtrSemana(Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.utr])));
+          if (vigente()) setUtrSemana(Object.fromEntries(semana.tecnicos.map((t) => [t.id, t.utr])));
         } catch (error) {
           console.warn('Sin la carga de la semana: el reparto solo equilibra el día', error);
-          setUtrSemana({});
+          if (vigente()) setUtrSemana({});
         }
       } else {
         setUtrSemana({});
       }
-      let assignment = await assignActivities(request);
+      if (!vigente()) return 'reemplazado';
+      let pedido = request;
+      let assignment = await assignActivities(pedido);
+      if (!vigente()) return 'reemplazado';
       // The backend could not reach the road server: the browser asks for the road times and the plan is redone
       if (!assignment.metricas.tiempos_por_vias) {
         message.loading({ content: 'Consultando tiempos por carretera desde el navegador...', key: 'assign', duration: 0 });
@@ -187,27 +276,55 @@ function App() {
             .map((a) => [a.coordinates.latitude, a.coordinates.longitude]),
         ];
         const matriz = await matrizPorVias(puntos);
-        if (matriz) assignment = await assignActivities({ ...request, matriz });
+        if (matriz && vigente()) {
+          pedido = { ...request, matriz };
+          assignment = await assignActivities(pedido);
+        }
       }
+      if (!vigente()) return 'reemplazado';
+      ultimoPedidoRef.current = pedido;
       setResult(assignment);
+      setDiaVacio(null);
       setIncluirRetorno(request.jornada.incluir_retorno);
-      setAssignedCodes(codesKey(base.actividades));
+      setAssignedCodes(firmaOts(base.actividades));
       const m = assignment.metricas;
       message.success({
         content: `${dayjs(request.dia).format('ddd D MMM')}: ${m.ots_con_tecnicos} a técnicos, ${m.ots_con_contratistas} a contratistas`,
         key: 'assign',
         duration: 3,
       });
+      return 'ok';
     } catch (error) {
-      console.error('Assignment error:', error);
-      message.error({ content: `Error calculando el plan: ${error.message}`, key: 'assign', duration: 10 });
+      if (!vigente()) return 'reemplazado';
+      if (error.message.startsWith('No hay OTs')) {
+        setDiaVacio(diaPlan);
+        message.info({ content: `${dayjs(diaPlan).format('ddd D MMM')}: no hay OTs para este día`, key: 'assign', duration: 3 });
+      } else {
+        console.error('Assignment error:', error);
+        message.error({ content: `Error calculando el plan: ${error.message}`, key: 'assign', duration: 10 });
+      }
+      return 'error';
     } finally {
-      setLoading(false);
+      if (vigente()) setLoading(false);
     }
   }, [dia, hoy, fijas, catalog, capacidad]);
+  // The panel calls the latest version (with the day and edits of now), even after a long read
+  const handleAssignRef = useRef(handleAssign);
+  handleAssignRef.current = handleAssign;
+  const onAssign = useCallback((base, overrides) => handleAssignRef.current(base, overrides), []);
+
+  // Recalculates with the panel's current settings (available technicians, mode, workday...);
+  // nothing if there is no plan yet
+  const recalcular = async (overrides = {}) => {
+    if (!baseRef.current) return null;
+    const pedido = panelRef.current ? await panelRef.current.pedido() : baseRef.current;
+    if (!pedido) return 'error';
+    return handleAssignRef.current(pedido, overrides);
+  };
 
   // A new day started: whoever was looking at today moves to the new today, and the plan is redone
-  // (with fresh OTs from Metabase if the automatic update is on): overdue pending OTs move to today
+  // (with fresh OTs from Metabase if the automatic update is on): pending OTs of the day before are overdue
+  // and leave the plan
   const hoyAnteriorRef = useRef(hoy);
   const [diasNuevos, setDiasNuevos] = useState(0);
   useEffect(() => {
@@ -220,7 +337,7 @@ function App() {
   const nuevoDiaRef = useRef(null);
   nuevoDiaRef.current = () => {
     if (panelState.canExtract && panelState.autoRefresh) panelRef.current?.refresh();
-    else if (baseRef.current) handleAssign(baseRef.current);
+    else recalcular();
   };
   useEffect(() => {
     if (diasNuevos) nuevoDiaRef.current();
@@ -228,7 +345,25 @@ function App() {
 
   const changeDay = (nuevo) => {
     setDia(nuevo);
-    if (baseRef.current) handleAssign(baseRef.current, { dia: nuevo });
+    setSeleccion([]);
+    setAlcanceTabla((actual) => (actual === 'todas' || actual === 'sin_fecha' ? 'dia' : actual));
+    // Choosing a day goes back to that day's plan
+    setEstado((actual) => (actual === 'backlog' ? 'pendientes' : actual));
+    recalcular({ dia: nuevo });
+  };
+
+  // Applies manual edits and recalculates; if the plan cannot be recalculated they are undone, so the
+  // list does not say «Elegido a mano» for a change that did not happen
+  const aplicarEdiciones = async (next) => {
+    const previas = Object.fromEntries(Object.keys({ ...fijas, ...next }).map((c) => [c, fijas[c]]));
+    setFijas(next);
+    const resultado = await recalcular({ fijas: next });
+    if (resultado === 'error') {
+      const cambiadas = Object.fromEntries(Object.entries(previas).filter(([c, v]) => v !== next[c]));
+      setFijas((actuales) => restaurar(actuales, cambiadas));
+      message.warning('El cambio no se aplicó porque el plan no se pudo recalcular', 6);
+    }
+    return resultado;
   };
 
   const handleEdit = (codigo, value, situacion) => {
@@ -236,88 +371,243 @@ function App() {
     // "Que decida la app" on a pending OT is the same as no edit
     if (!value || (value === 'auto' && situacion !== 'asignada')) delete next[codigo];
     else next[codigo] = value;
-    setFijas(next);
-    if (baseRef.current) handleAssign(baseRef.current, { fijas: next });
+    aplicarEdiciones(next);
   };
 
-  const clearEdits = () => {
-    setFijas({});
-    if (baseRef.current) handleAssign(baseRef.current, { fijas: {} });
+  // After assigning a batch, the map shows the route of whoever received it
+  const verRutas = (valores) => {
+    if (!valores.length) return;
+    // The whole route of those people, not only the OTs the search had found
+    setBusqueda('');
+    setAsignadoA(valores);
+    setEstado('todas');
+    setDestino(null);
+    setVista('mapa');
   };
+
+  // The selected OTs all to one destination, or a proposal by proximity
+  const aplicarLote = async (valor, soloPendientes = false) => {
+    if (!baseRef.current || !seleccion.length) return;
+    const situacionDe = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d.situacion]));
+    // "Solo por asignar" leaves the assigned ones of the selection as they are
+    const codigos = soloPendientes ? seleccion.filter((c) => situacionDe[c] === 'pendiente') : seleccion;
+    if (!codigos.length) return;
+    if (valor === POR_CERCANIA) {
+      // The proposal starts from the plan on screen: it has to be calculated with the current settings
+      if (ajustesCambiados) {
+        message.warning('Cambiaste técnicos o ajustes: recalcula el plan (↻) antes de armar el lote', 6);
+        return;
+      }
+      setLoteOcupado(true);
+      try {
+        // What each technician already has in the plan being viewed: "near" and "free" are decided on it
+        const planActual = Object.fromEntries((plan?.decisiones || [])
+          .filter((d) => d.enviar_a === 'tecnico' && d.responsable_id)
+          .map((d) => [d.codigo_bia, d.responsable_id]));
+        setPropuesta(await proposeBatch({ ...ultimoPedidoRef.current, codigos, plan_actual: planActual }));
+      } catch (error) {
+        message.error(`No se pudo armar la propuesta: ${error.message}`);
+      } finally {
+        setLoteOcupado(false);
+      }
+      return;
+    }
+    const next = { ...fijas };
+    codigos.forEach((codigo) => {
+      // "Que decida la app" on a pending OT is the same as no edit
+      if (valor === 'auto' && situacionDe[codigo] !== 'asignada') delete next[codigo];
+      else next[codigo] = valor;
+    });
+    const [tipo, id] = valor.split(':');
+    const nombre = tipo === 'tecnico' ? config.tecnicos.find((t) => t.id === id)?.nombre
+      : catalog.empresas.find((e) => e.id === id)?.nombre;
+    setSeleccion([]);
+    if (await aplicarEdiciones(next) === 'ok' && nombre) verRutas([`${tipo === 'tecnico' ? 't' : 'c'}:${nombre}`]);
+  };
+
+  const confirmarCercania = async (asignaciones, tecnicosElegidos) => {
+    setPropuesta(null);
+    setSeleccion([]);
+    if (await aplicarEdiciones({ ...fijas, ...asignaciones }) === 'ok') {
+      verRutas([...new Set(tecnicosElegidos.filter(Boolean))].map((n) => `t:${n}`));
+    }
+  };
+
+  const clearEdits = () => aplicarEdiciones({});
 
   // Activity of each OT: from Metabase and, for the plan, as the optimizer returned it
   const actividades = useMemo(() => {
     const porCodigo = {};
     (ots || []).forEach((a) => { porCodigo[a.codigo_bia] = a; });
-    (result?.rutas || []).forEach((r) => r.ruta.paradas.forEach((p) => { porCodigo[p.actividad.codigo_bia] = p.actividad; }));
-    (result?.sin_asignar || []).forEach(({ actividad }) => { porCodigo[actividad.codigo_bia] = actividad; });
+    (plan?.rutas || []).forEach((r) => r.ruta.paradas.forEach((p) => { porCodigo[p.actividad.codigo_bia] = p.actividad; }));
+    (plan?.sin_asignar || []).forEach(({ actividad }) => { porCodigo[actividad.codigo_bia] = actividad; });
     return porCodigo;
-  }, [ots, result]);
+  }, [ots, plan]);
 
-  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino);
+  const filtrosActivos = Boolean(busqueda.trim() || estado !== 'todas' || asignadoA.length || destino || ors.length);
+  // Metabase writes the same OR in several ways ("AFINIA - CARIBEMAR DE LA COSTA", "Afinia"):
+  // the filter uses the name of the OR catalog
+  const [nombresOr, setNombresOr] = useState({});
+  const nombresOrKey = useMemo(() => [...new Set((ots || []).map((a) => a.or_operador))].sort().join('|'), [ots]);
+  useEffect(() => {
+    if (!nombresOrKey) return;
+    getOperators(nombresOrKey.split('|')).then((r) => setNombresOr(r.resueltos || {})).catch(() => setNombresOr({}));
+  }, [nombresOrKey]);
+  const orDe = useCallback((a) => nombresOr[a?.or_operador] || a?.or_operador, [nombresOr]);
+  const pasaOr = useCallback((a) => !ors.length || ors.includes(orDe(a)), [ors, orDe]);
+  // The ORs of the loaded OTs, with how many pending OTs (any date) each one has
+  const opcionesOr = useMemo(() => {
+    const total = {};
+    const pendientes = {};
+    (ots || []).forEach((a) => {
+      const nombre = orDe(a);
+      total[nombre] = (total[nombre] || 0) + 1;
+      if (a.situacion === 'pendiente') pendientes[nombre] = (pendientes[nombre] || 0) + 1;
+    });
+    return Object.keys(total).sort().map((nombre) => ({
+      value: nombre,
+      label: `${nombre} · ${pendientes[nombre] || 0} por asignar`,
+    }));
+  }, [ots, orDe]);
   // Whether a decision passes the filters; the counts can leave out the status or destination filter
   const pasaFiltros = useCallback((d, { porEstado = true, porDestino = true } = {}) => {
     const texto = normalizeText(busqueda.trim());
-    return (!porEstado || estado === 'todas' || (estado === 'pendientes' ? d.situacion === 'pendiente' : d.situacion === 'asignada'))
+    return (!porEstado || estado === 'todas' || (estado === 'asignadas' ? d.situacion === 'asignada' : d.situacion === 'pendiente'))
       && (!porDestino || !destino || d.enviar_a === destino)
       && matchesAssignee(d, asignadoA)
+      && pasaOr(actividades[d.codigo_bia])
       && (!texto || searchText(d.codigo_bia, actividades[d.codigo_bia], d.responsable).includes(texto));
-  }, [busqueda, estado, destino, asignadoA, actividades]);
+  }, [busqueda, estado, destino, asignadoA, actividades, pasaOr]);
 
   const visibles = useMemo(() => {
-    if (!result || !filtrosActivos) return null;
-    return new Set(result.decisiones.filter((d) => pasaFiltros(d)).map((d) => d.codigo_bia));
-  }, [result, filtrosActivos, pasaFiltros]);
+    if (!plan || !filtrosActivos) return null;
+    return new Set(plan.decisiones.filter((d) => pasaFiltros(d)).map((d) => d.codigo_bia));
+  }, [plan, filtrosActivos, pasaFiltros]);
 
   // Each tile counts the OTs of the selected people/search; it ignores only its own filter,
   // so "Por asignar" still shows how many are pending while "Asignadas" is selected
   const conteos = useMemo(() => {
-    if (!result) return null;
-    const sinEstado = result.decisiones.filter((d) => pasaFiltros(d, { porEstado: false }));
-    const sinDestino = result.decisiones.filter((d) => pasaFiltros(d, { porDestino: false }));
+    if (!plan) return null;
+    const sinEstado = plan.decisiones.filter((d) => pasaFiltros(d, { porEstado: false }));
+    const sinDestino = plan.decisiones.filter((d) => pasaFiltros(d, { porDestino: false }));
     const cuantas = (lista, campo, valor) => lista.filter((d) => d[campo] === valor).length;
     return {
-      total: result.decisiones.filter((d) => pasaFiltros(d, { porEstado: false, porDestino: false })).length,
+      total: plan.decisiones.filter((d) => pasaFiltros(d, { porEstado: false, porDestino: false })).length,
       todas: sinEstado.length,
       asignada: cuantas(sinEstado, 'situacion', 'asignada'),
       pendiente: cuantas(sinEstado, 'situacion', 'pendiente'),
       tecnico: cuantas(sinDestino, 'enviar_a', 'tecnico'),
       contratista: cuantas(sinDestino, 'enviar_a', 'contratista'),
+      // Suggestions: Ruteo proposes a destination but the OT is still pending in Metabase
+      tecnico_sugeridas: sinDestino.filter((d) => d.enviar_a === 'tecnico' && d.situacion === 'pendiente').length,
+      contratista_sugeridas: sinDestino.filter((d) => d.enviar_a === 'contratista' && d.situacion === 'pendiente').length,
       externo: cuantas(sinDestino, 'enviar_a', 'externo'),
       sin_asignar: cuantas(sinDestino, 'enviar_a', 'sin_asignar'),
     };
-  }, [result, pasaFiltros]);
+  }, [plan, pasaFiltros]);
 
-  // The full table shows the OTs of the day (pending and assigned for that date) with the same filters
-  const otsFiltradas = useMemo(() => {
+  // Every OT still pending in Metabase, whatever its date (not the overdue ones: they do not apply), with
+  // its decision if it is in the day's plan. The search and "Asignado a" apply too (an OT of another day
+  // has nobody yet)
+  const pendientesTodas = useMemo(() => {
     const texto = normalizeText(busqueda.trim());
-    const decisiones = Object.fromEntries((result?.decisiones || []).map((d) => [d.codigo_bia, d]));
-    return (ots || []).filter((a) => (
-      entraEnElDia(a, dia, hoy)
-      && (estado === 'todas' || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
+    const decisiones = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    return (ots || [])
+      .filter((a) => a.situacion === 'pendiente' && !estaVencida(a, hoy))
+      .map((a) => ({ actividad: a, grupo: grupoPendiente(a.fecha_visita, hoy), decision: decisiones[a.codigo_bia] }))
+      .filter(({ actividad: a, decision: d }) => (!asignadoA.length || (d && matchesAssignee(d, asignadoA)))
+        && pasaOr(a)
+        && (!texto || searchText(a.codigo_bia, a, d?.responsable).includes(texto)))
+      .sort((x, y) => (GRUPOS_PENDIENTES[x.grupo] - GRUPOS_PENDIENTES[y.grupo])
+        || (x.actividad.fecha_visita || '').localeCompare(y.actividad.fecha_visita || ''));
+  }, [ots, plan, hoy, busqueda, asignadoA, pasaOr]);
+
+  // For each pending OT, the OTs already assigned in Metabase near it, with the plan's distance «cerca»
+  const radioCerca = baseRef.current?.jornada?.radio_grupo_km ?? 2;
+  const cercanas = useMemo(
+    () => asignadasCerca(ots, { hoy, radio: radioCerca, cerrada: (a) => esCerrada(a, mapeo.situacion) }),
+    [ots, hoy, radioCerca, mapeo],
+  );
+
+  const porAsignar = useMemo(() => {
+    const cuantas = (grupo) => pendientesTodas.filter((p) => p.grupo === grupo).length;
+    return {
+      total: pendientesTodas.length,
+      hoy: cuantas('hoy'),
+      proximas: cuantas('proxima'),
+      sinFecha: cuantas('sin_fecha'),
+    };
+  }, [pendientesTodas]);
+
+  // The full table, with the same filters as the rest: the OTs of the day's plan (exactly the ones in
+  // the list), the ones whose visit is that day (any state, as in Olibia), the undated ones, or all
+  const tabla = useMemo(() => {
+    const texto = normalizeText(busqueda.trim());
+    const decisiones = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    const filtradas = (ots || []).filter((a) => (
+      pasaOr(a)
+      && (estado === 'todas' || estado === 'backlog'
+        || (estado === 'pendientes' ? a.situacion === 'pendiente' : a.situacion === 'asignada'))
       && (!destino || decisiones[a.codigo_bia]?.enviar_a === destino)
       && (!asignadoA.length || (decisiones[a.codigo_bia] && matchesAssignee(decisiones[a.codigo_bia], asignadoA)))
       && (!texto || searchText(a.codigo_bia, a, decisiones[a.codigo_bia]?.responsable).includes(texto))
     ));
-  }, [ots, result, dia, hoy, busqueda, estado, destino, asignadoA]);
-
-  // Everything still pending in Metabase, whatever its date: what is left to assign. The tile shows
-  // it while no person or search is selected (the pending OTs of other days have no plan yet)
-  const porAsignar = useMemo(() => {
-    if (busqueda.trim() || asignadoA.length) return null;
-    const pendientes = (ots || []).filter((a) => a.situacion === 'pendiente');
     return {
-      total: pendientes.length,
-      vencidas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita < hoy).length,
-      hoy: pendientes.filter((a) => a.fecha_visita === hoy).length,
-      proximas: pendientes.filter((a) => a.fecha_visita && a.fecha_visita > hoy).length,
-      sinFecha: pendientes.filter((a) => !a.fecha_visita).length,
+      dia: filtradas.filter((a) => (plan ? Boolean(decisiones[a.codigo_bia]) : entraEnElDia(a, dia, hoy))),
+      visita: filtradas.filter((a) => a.fecha_visita === dia),
+      sin_fecha: filtradas.filter((a) => !a.fecha_visita),
+      todas: filtradas,
     };
-  }, [ots, hoy, busqueda, asignadoA]);
+  }, [ots, plan, dia, hoy, busqueda, estado, destino, asignadoA, pasaOr]);
+  const otsFiltradas = estado === 'backlog' ? pendientesTodas.map((p) => p.actividad) : tabla[alcanceTabla];
+
+  // For every loaded OT: whether it is in the plan of the day and, if not, why
+  const motivosPlan = useMemo(() => {
+    if (alcanceTabla === 'dia' || !ots) return null;
+    const decisiones = Object.fromEntries((plan?.decisiones || []).map((d) => [d.codigo_bia, d]));
+    const filtroOr = (baseRef.current?.or_filtro || []).map(normalizeText);
+    const calculadas = baseRef.current ? new Set(baseRef.current.actividades.map((a) => a.codigo_bia)) : null;
+    return Object.fromEntries(ots.map((a) => [a.codigo_bia, enElPlan(a, {
+      decision: decisiones[a.codigo_bia],
+      dia,
+      hoy,
+      filtroOr,
+      calculadas,
+      cerrada: esCerrada(a, mapeo.situacion),
+    })]));
+  }, [alcanceTabla, ots, plan, dia, hoy, mapeo]);
+
+  const backlog = estado === 'backlog';
+  // Views of several days, not of the plan of one: they hide the filters of the day
+  const vistaResumen = vista === 'utilizacion' || vista === 'resultados';
+  // Views where the chosen date does not apply: the date box says so instead of showing a day
+  const sinDia = backlog ? 'Todas las fechas'
+    : vista === 'tabla' && alcanceTabla === 'todas' ? 'Todas las fechas'
+      : vista === 'tabla' && alcanceTabla === 'sin_fecha' ? 'Sin fecha' : null;
+  // The map and the routes are of one day: "Falta por asignar" is a list
+  const cambiarVista = (nueva) => {
+    setVista(nueva);
+    if (backlog && (nueva === 'mapa' || nueva === 'rutas')) setEstado('pendientes');
+  };
+  const filtrarEstado = (nuevo) => {
+    setEstado(nuevo);
+    if (nuevo === 'backlog' && (vista === 'mapa' || vista === 'rutas')) setVista('lista');
+  };
+  // From the list of everything pending: plan the day of that OT (undated ones, today)
+  const planearDia = (fecha) => {
+    const objetivo = fecha && fecha > hoy ? fecha : hoy;
+    setEstado('pendientes');
+    if (objetivo !== dia) changeDay(objetivo);
+  };
 
   const busy = loading || panelState.fetching;
-  const stale = Boolean(result && ots) && codesKey(ots) !== assignedCodes;
-  const disponibles = new Set(baseRef.current?.tecnicos_ids || []);
+  const stale = Boolean(result && ots) && firmaOts(ots) !== assignedCodes;
+  // Technicians, mode or workday changed in the panel after the plan on screen was calculated
+  const ajustesCambiados = Boolean(plan && panelState.firma && baseRef.current?.firma
+    && panelState.firma !== baseRef.current.firma);
+  // Technicians available as the panel has them now (switching one off counts at once for editing)
+  const disponibles = new Set(panelState.disponibles !== null
+    ? panelState.disponibles.split('|') : baseRef.current?.tecnicos_ids || []);
   const tecnicosEdicion = config.tecnicos
     .filter((t) => t.activo !== false)
     .map((t) => ({ id: t.id, nombre: t.nombre, disponible: disponibles.has(t.id), utr: utrSemana[t.id] }));
@@ -332,12 +622,28 @@ function App() {
             <span className="app-title">Ruteo</span>
             {ots && (
               <span className="app-subtitle">
-                {ots.length} OTs{actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
+                <Tooltip title="Ver todas las OTs cargadas y por qué cada una está o no en el plan">
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => { setVista('tabla'); setAlcanceTabla('todas'); setEstado((e) => (e === 'backlog' ? 'todas' : e)); }}
+                  >
+                    {ots.length} OTs cargadas
+                  </button>
+                </Tooltip>
+                {actualizado ? ` · actualizado ${actualizado.format('HH:mm')}` : ''}
                 {source.startsWith('Archivo') ? ` · ${source}` : ''}
               </span>
             )}
           </Space>
           <Space size={6}>
+            {sesion.cuenta && (
+              <span className="app-subtitle sesion">
+                {sesion.cuenta.nombre}
+                {' · '}
+                <button type="button" className="link-button" onClick={sesion.salir}>Salir</button>
+              </span>
+            )}
             {ots?.length > 0 && (
               <Tooltip title="Recalcular con los ajustes actuales">
                 <Button type="text" icon={<ReloadOutlined />} disabled={busy} onClick={() => panelRef.current?.recalc()} />
@@ -356,6 +662,30 @@ function App() {
       </Header>
 
       <Layout>
+        <nav className="tool-rail" aria-label="Barra de herramientas">
+          <Tooltip title={panelAbierto ? 'Ocultar panel' : 'Mostrar panel'} placement="right">
+            <Button
+              type="text"
+              className="rail-button"
+              aria-label={panelAbierto ? 'Ocultar panel' : 'Mostrar panel'}
+              aria-pressed={panelAbierto}
+              icon={panelAbierto ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+              onClick={() => setPanelAbierto((abierto) => !abierto)}
+            />
+          </Tooltip>
+          <div className="rail-divider" />
+          {SECCIONES_PANEL.map((seccion) => (
+            <Tooltip key={seccion.key} title={seccion.label} placement="right">
+              <Button
+                type="text"
+                className="rail-button"
+                aria-label={seccion.label}
+                icon={seccion.icon}
+                onClick={() => abrirSeccion(seccion.key)}
+              />
+            </Tooltip>
+          ))}
+        </nav>
         <Sider
           width={340}
           className="ios-sider"
@@ -366,19 +696,19 @@ function App() {
             top: 56,
             left: 0,
           }}
-          collapsible
-          collapsed={siderCollapsed}
-          onCollapse={setSiderCollapsed}
+          collapsed={!panelAbierto}
           collapsedWidth={0}
+          trigger={null}
           breakpoint="lg"
+          // On a narrow screen it starts hidden; the toolbar shows it
+          onBreakpoint={(estrecha) => { if (estrecha) setPanelAbierto(false); }}
         >
-          {/* Bottom padding so the sider collapse trigger does not cover the last section */}
-          <div style={{ padding: '8px 0 72px' }}>
+          <div style={{ padding: '8px 0 24px' }}>
             <AssignmentPanel
               ref={panelRef}
               ots={ots}
               onOtsLoaded={handleOtsLoaded}
-              onAssign={handleAssign}
+              onAssign={onAssign}
               loading={loading}
               config={config}
               onConfigChange={setConfig}
@@ -394,29 +724,34 @@ function App() {
           <Content>
             <div className="title-row">
               <div>
-                <div className="eyebrow">{dia === hoy ? 'Hoy' : 'Plan del día'}</div>
-                <div className="large-title">{capitalize(dayjs(dia).format('dddd D [de] MMMM'))}</div>
+                <div className="eyebrow">
+                  {backlog ? 'Falta por asignar' : sinDia ? 'OTs cargadas' : (dia === hoy ? 'Hoy' : 'Plan del día')}
+                </div>
+                <div className="large-title">
+                  {sinDia ? (sinDia === 'Sin fecha' ? 'Sin fecha de visita' : sinDia) : capitalize(dayjs(dia).format('dddd D [de] MMMM'))}
+                </div>
               </div>
               <Segmented
                 value={vista}
-                onChange={setVista}
+                onChange={cambiarVista}
                 options={[
                   { value: 'lista', label: 'Lista' },
                   { value: 'mapa', label: 'Mapa' },
                   { value: 'rutas', label: 'Rutas' },
                   { value: 'utilizacion', label: 'Utilización' },
+                  { value: 'resultados', label: 'Resultados' },
                   { value: 'tabla', label: 'Tabla completa' },
                 ]}
               />
             </div>
 
             <div className="filter-bar">
-              {vista !== 'utilizacion' && (
+              {!vistaResumen && (
                 <Input
                   allowClear
                   variant="filled"
                   prefix={<SearchOutlined />}
-                  placeholder="Buscar por nombre, OT o dirección"
+                  placeholder="Buscar por nombre, OT, dirección o quién la creó"
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
                   className="filter-search"
@@ -429,12 +764,13 @@ function App() {
                   onClick={() => changeDay(dayjs(dia).subtract(1, 'day').format(ISO_DAY))}
                 />
                 <DatePicker
-                  value={dayjs(dia)}
+                  value={sinDia ? null : dayjs(dia)}
+                  placeholder={sinDia || 'Elige el día'}
                   allowClear={false}
                   disabled={busy}
                   format="DD/MM/YYYY"
                   onChange={(d) => d && changeDay(d.format(ISO_DAY))}
-                  style={{ width: 128 }}
+                  style={{ width: 140 }}
                 />
                 <Button
                   icon={<RightOutlined />}
@@ -445,14 +781,22 @@ function App() {
               {dia !== hoy && (
                 <Button type="link" disabled={busy} onClick={() => changeDay(hoy)} style={{ paddingInline: 4 }}>Hoy</Button>
               )}
-              {vista !== 'utilizacion' && (
+              {!vistaResumen && (
               <Segmented
                 value={estado}
-                onChange={setEstado}
+                onChange={filtrarEstado}
                 options={[
                   { value: 'todas', label: `Todas${conteos ? ` ${conteos.todas}` : ''}` },
                   { value: 'pendientes', label: `Por asignar${conteos ? ` ${conteos.pendiente}` : ''}` },
                   { value: 'asignadas', label: `Asignadas${conteos ? ` ${conteos.asignada}` : ''}` },
+                  ...(ots ? [{
+                    value: 'backlog',
+                    label: (
+                      <Tooltip title="Todas las OTs pendientes de Metabase, sin importar la fecha">
+                        {`Falta por asignar ${porAsignar.total}`}
+                      </Tooltip>
+                    ),
+                  }] : []),
                 ]}
               />
               )}
@@ -465,13 +809,33 @@ function App() {
                 placeholder="Asignado a"
                 value={asignadoA}
                 onChange={setAsignadoA}
-                options={assigneeOptions(result, config.tecnicos)}
+                options={assigneeOptions(plan, config.tecnicos)}
                 optionFilterProp="label"
                 popupMatchSelectWidth={false}
                 className="filter-assignee"
+                // It grows with the people chosen, so their names show instead of "+ 2 ..."
+                style={{ width: asignadoA.length ? Math.min(460, 140 + asignadoA.length * 150) : 180 }}
               />
+              {!vistaResumen && (
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  maxTagCount="responsive"
+                  variant="filled"
+                  placeholder="OR"
+                  value={ors}
+                  onChange={setOrs}
+                  options={opcionesOr}
+                  optionFilterProp="label"
+                  popupMatchSelectWidth={false}
+                  className="filter-or"
+                  aria-label="Filtrar por OR"
+                  style={{ width: ors.length ? Math.min(360, 110 + ors.length * 110) : 110 }}
+                />
+              )}
               {filtrosActivos && (
-                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); }} style={{ paddingInline: 4 }}>
+                <Button type="link" onClick={() => { setBusqueda(''); setEstado('todas'); setAsignadoA([]); setDestino(null); setOrs([]); }} style={{ paddingInline: 4 }}>
                   Limpiar
                 </Button>
               )}
@@ -483,6 +847,21 @@ function App() {
             </div>
 
             <Spin spinning={loading} tip="Calculando el plan del día...">
+              {panelState.errorLectura && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  className="ios-alert"
+                  message={`No se pudo actualizar desde Metabase a las ${panelState.errorLectura.hora}`}
+                  description={`${panelState.errorLectura.mensaje}${actualizado
+                    ? `. Lo que ves es de la lectura de las ${actualizado.format('HH:mm')}.` : ''}`}
+                  action={(
+                    <Button size="small" disabled={busy || !panelState.canExtract} onClick={() => panelRef.current?.extract()}>
+                      Reintentar
+                    </Button>
+                  )}
+                />
+              )}
               {stale && (
                 <Alert
                   type="info"
@@ -491,26 +870,70 @@ function App() {
                   message="Las OTs cambiaron desde el último cálculo. Pulsa recalcular (↻) arriba a la derecha."
                 />
               )}
+              {ajustesCambiados && !stale && (
+                <Alert
+                  type="info"
+                  showIcon
+                  className="ios-alert"
+                  message="Cambiaste técnicos o ajustes: el plan en pantalla todavía no los tiene en cuenta."
+                  action={(
+                    <Button size="small" type="primary" disabled={busy} onClick={() => panelRef.current?.recalc()}>
+                      Recalcular
+                    </Button>
+                  )}
+                />
+              )}
               {vista === 'tabla' && (
                 ots?.length ? (
-                  <OtsTable ots={otsFiltradas} nuevas={nuevas} mapeo={mapeo} config={config} title={`OTs del día (${otsFiltradas.length})`} />
+                  <>
+                    {!backlog && (
+                      <Segmented
+                        className="tabla-alcance"
+                        value={alcanceTabla}
+                        onChange={setAlcanceTabla}
+                        options={[
+                          { value: 'dia', label: `Plan del ${dayjs(dia).format('D MMM')} (${tabla.dia.length})` },
+                          { value: 'visita', label: `Con visita el ${dayjs(dia).format('D MMM')} (${tabla.visita.length})` },
+                          { value: 'sin_fecha', label: `Sin fecha (${tabla.sin_fecha.length})` },
+                          { value: 'todas', label: `Todas las fechas (${tabla.todas.length})` },
+                        ]}
+                      />
+                    )}
+                    <OtsTable
+                      ots={otsFiltradas}
+                      nuevas={nuevas}
+                      mapeo={mapeo}
+                      config={config}
+                      enPlan={!backlog ? motivosPlan : null}
+                      cercanas={backlog ? cercanas : null}
+                      radioCerca={radioCerca}
+                      enPlanTitulo={`En el plan del ${dayjs(dia).format('D MMM')}`}
+                      title={backlog ? `Falta por asignar, todas las fechas (${otsFiltradas.length})` : {
+                        dia: `En el plan del ${dayjs(dia).format('D MMM')} (${otsFiltradas.length})`,
+                        visita: `Con visita el ${dayjs(dia).format('D MMM')}, en cualquier estado (${otsFiltradas.length})`,
+                        sin_fecha: `Sin fecha de visita (${otsFiltradas.length})`,
+                        todas: `Todas las cargadas, todas las fechas (${otsFiltradas.length})`,
+                      }[alcanceTabla]}
+                    />
+                  </>
                 ) : <EmptyState />
               )}
+              {vista === 'resultados' && <ResultsDashboard ots={ots} hoy={hoy} />}
               {vista === 'utilizacion' && (
                 <UtilizationDashboard
                   ots={ots}
                   config={config}
                   dia={dia}
-                  result={result}
+                  result={plan}
                   tecnicosFiltro={asignadoA.filter((v) => v.startsWith('t:')).map((v) => v.slice(2))}
                   horasSemana={capacidad.horasSemana}
                   diasSemana={capacidad.diasSemana}
                   onCapacidad={(cambio) => setCapacidad((prev) => ({ ...prev, ...cambio }))}
                 />
               )}
-              {vista !== 'tabla' && vista !== 'utilizacion' && (result ? (
+              {vista !== 'tabla' && !vistaResumen && (plan ? (
                 <AssignmentResults
-                  result={result}
+                  result={plan}
                   ots={ots}
                   nuevas={nuevas}
                   incluirRetorno={incluirRetorno}
@@ -518,21 +941,53 @@ function App() {
                   visibles={visibles}
                   conteos={conteos}
                   porAsignar={porAsignar}
+                  pendientesTodas={backlog ? pendientesTodas : null}
+                  cercanas={cercanas}
+                  radioCerca={radioCerca}
+                  onPlanearDia={planearDia}
+                  hoy={hoy}
                   horasDia={capacidad.horasSemana / capacidad.diasSemana}
                   estado={estado}
                   destino={destino}
                   onFiltrar={({ estado: nuevoEstado, destino: nuevoDestino }) => {
-                    if (nuevoEstado !== undefined) setEstado(nuevoEstado);
+                    if (nuevoEstado !== undefined) filtrarEstado(nuevoEstado);
                     if (nuevoDestino !== undefined) setDestino(nuevoDestino);
                   }}
                   fijas={fijas}
+                  seleccion={seleccion}
+                  onSeleccion={vista === 'lista' && !backlog ? setSeleccion : undefined}
                   onEdit={handleEdit}
                   tecnicos={tecnicosEdicion}
                   empresas={catalog.empresas}
                   editing={loading}
                 />
-              ) : <EmptyState />)}
+              ) : (
+                <EmptyState
+                  vacio={diaVacio === dia}
+                  otroDia={Boolean(result)}
+                  calculando={loading}
+                  dia={dayjs(dia).format('dddd D [de] MMMM')}
+                />
+              ))}
             </Spin>
+            {vista === 'lista' && !backlog && plan && seleccion.length > 0 && (
+              <LoteBar
+                cantidad={seleccion.length}
+                pendientes={seleccion.filter((c) => plan?.decisiones.find((d) => d.codigo_bia === c)?.situacion === 'pendiente').length}
+                tecnicos={tecnicosEdicion}
+                empresas={catalog.empresas}
+                onAplicar={aplicarLote}
+                onLimpiar={() => setSeleccion([])}
+                ocupado={loteOcupado || loading}
+              />
+            )}
+            <LoteModal
+              propuesta={propuesta}
+              actividades={actividades}
+              onCancelar={() => setPropuesta(null)}
+              onAplicar={confirmarCercania}
+              ocupado={loading}
+            />
           </Content>
         </Layout>
       </Layout>
@@ -540,13 +995,37 @@ function App() {
   );
 }
 
-const EmptyState = () => (
-  <div className="empty-state">
-    <div className="empty-title">Sin plan todavía</div>
-    <div className="empty-text">
-      Pulsa «Extraer y recomendar»: las OTs ya asignadas para este día se respetan y la app sugiere a quién enviar las pendientes.
+const EmptyState = ({
+  vacio = false, otroDia = false, calculando = false, dia = '',
+}) => {
+  if (vacio && !calculando) {
+    return (
+      <div className="empty-state">
+        <div className="empty-title">{`No hay OTs para el ${dia}`}</div>
+        <div className="empty-text">
+          Ninguna OT tiene visita ese día con los OR de Ajustes. Lo que falta por asignar de otras fechas está en «Falta por asignar».
+        </div>
+      </div>
+    );
+  }
+  if (otroDia) {
+    return (
+      <div className="empty-state">
+        <div className="empty-title">{calculando ? `Calculando el plan del ${dia}…` : `Sin plan para el ${dia}`}</div>
+        {!calculando && (
+          <div className="empty-text">Pulsa recalcular (↻) arriba a la derecha para armar el plan de este día.</div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="empty-state">
+      <div className="empty-title">Sin plan todavía</div>
+      <div className="empty-text">
+        Pulsa «Extraer y recomendar»: las OTs ya asignadas para este día se respetan y la app sugiere a quién enviar las pendientes.
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default App;

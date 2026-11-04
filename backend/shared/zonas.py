@@ -7,10 +7,9 @@ import json
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from services.distance_service.calculator import haversine_distance
-
 from .models import CoberturaEquipo, GPSCoordinates, OperadorRed, Zona, ZonaTransito
 from .operadores import clave, normalizar_departamento, resolver_or
+from .utils import haversine_distance
 
 DEFAULT_ZONAS_PATH = Path(__file__).resolve().parent.parent / "data" / "zonas_bia.json"
 
