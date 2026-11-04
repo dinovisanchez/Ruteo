@@ -1,6 +1,7 @@
 /**
- * Session of «Iniciar sesión con Google» when Ruteo runs on a shared server (see components/Acceso).
- * The Google ID token lives in sessionStorage until it expires or the person signs out.
+ * Session when Ruteo runs on a shared server (see components/Acceso): the Google ID token, or the
+ * token the server gives for the access key. It lives in sessionStorage until it expires or the
+ * person signs out.
  */
 const SESION_KEY = 'ruteo_sesion';
 let sesion = null;

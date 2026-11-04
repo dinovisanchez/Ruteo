@@ -234,26 +234,29 @@ Para que todos los coordinadores usen el mismo Ruteo (la misma configuración de
 ```bash
 docker build -t ruteo .
 docker run -d -p 8000:8000 --env-file backend/.env -v ruteo-datos:/datos \
-  -e GOOGLE_CLIENT_ID=<client id> -e ALLOWED_HOSTS='["ruteo.bia.app"]' ruteo
+  -e CLAVE_ACCESO='<una frase larga>' -e ALLOWED_HOSTS='["ruteo.bia.app"]' ruteo
 ```
 
 - **Datos**: la configuración, las sugerencias y el caché de direcciones quedan en `/datos`; móntalo como volumen para no perderlos al actualizar.
-- **Login con Google**: en Google Cloud → *APIs y servicios* → *Credenciales* → *Crear ID de cliente de OAuth* (tipo *Aplicación web*), con la dirección del servidor en *Orígenes de JavaScript autorizados* (por ejemplo `https://ruteo.bia.app`). El *ID de cliente* va en `GOOGLE_CLIENT_ID` (no es secreto). Con él, Ruteo pide iniciar sesión con Google y solo deja entrar cuentas de `DOMINIOS_PERMITIDOS` (`["bia.app"]` por defecto) o de `CORREOS_PERMITIDOS`. **Sin él el servidor no arranca**, porque cualquiera que llegue a la dirección vería las OTs de Metabase; para probar en un equipo propio se puede arrancar sin login con `-e SIN_LOGIN=1`.
+- **Login**: el servidor **no arranca sin uno**, porque cualquiera que llegue a la dirección vería las OTs de Metabase. Hay dos:
+  - **Clave de acceso** (sin Google Cloud): `CLAVE_ACCESO` con 12 caracteres o más (mejor una frase de varias palabras). La app la pide al entrar y da una sesión de 12 horas; tras 10 intentos equivocados desde una dirección hay que esperar 15 minutos. Compártela con el equipo por un canal privado (nunca en el repositorio ni en un chat); al cambiarla, todas las sesiones se cierran.
+  - **Google**: en Google Cloud → *APIs y servicios* → *Credenciales* → *Crear ID de cliente de OAuth* (tipo *Aplicación web*), con la dirección del servidor en *Orígenes de JavaScript autorizados* (por ejemplo `https://ruteo.bia.app`). El *ID de cliente* va en `GOOGLE_CLIENT_ID` (no es secreto). Con él, Ruteo pide iniciar sesión con Google y solo deja entrar cuentas de `DOMINIOS_PERMITIDOS` (`["bia.app"]` por defecto) o de `CORREOS_PERMITIDOS`. Si están las dos, manda Google.
+  - Para probar en un equipo propio se puede arrancar sin login con `-e SIN_LOGIN=1`.
 - **Dirección**: `ALLOWED_HOSTS` es la lista de nombres con que se entra (la imagen acepta cualquiera si no se pone). Va detrás de HTTPS (un balanceador o un proxy): Google exige HTTPS para el login, salvo en `localhost`.
 - **Metabase, Google Geocoding, OSRM**: las mismas variables de `backend/.env`.
 - **Varias personas a la vez**: si dos guardan cambios de configuración al tiempo, el segundo recibe un aviso para recargar en vez de borrar lo del primero.
 - Sin Docker: compila la app con `REACT_APP_API_URL=/api npm run build` en `frontend/` y corre `./servidor.sh` (en Linux).
 
-En GitHub, cada push construye la imagen y revisa que sin login no arranque, que sirva la app y que con `GOOGLE_CLIENT_ID` pida iniciar sesión y deje entrar a la app en Vercel.
+En GitHub, cada push construye la imagen y revisa que sin login (o con una clave corta) no arranque, que sirva la app, que con `CLAVE_ACCESO` solo se entre con la clave y que con `GOOGLE_CLIENT_ID` pida iniciar sesión y deje entrar a la app en Vercel.
 
 ### Con la pantalla en Vercel
 
 Vercel sirve bien la pantalla (`frontend/`), pero **el backend no puede ir en Vercel**: tiene que estar siempre encendido (el optimizador, la búsqueda de direcciones en segundo plano) y guardar la configuración de técnicos y contratistas en `/datos`. Si en Vercel sale «No hay conexión con el backend», es porque la pantalla sigue buscando el backend en `http://localhost:8000`, que solo existe en el Mac de cada uno.
 
 1. **El backend en un servicio que corra la imagen de Docker con un disco**. Por ejemplo, en Render: *New → Web Service* → este repositorio (encuentra el `Dockerfile` solo), *Health check path* `/api/health` y un *Disk* montado en `/datos`. Cualquier otro que corra Docker con un volumen sirve igual (Railway, Fly.io, una máquina de Bia).
-2. **Sus variables** (en el panel del servicio, nunca en el repositorio ni en un chat): `METABASE_URL`, `METABASE_API_KEY`, `METABASE_CARD_ID` y las demás de `backend/.env` que uses; `GOOGLE_CLIENT_ID`; y `FRONTEND_URL` con la dirección de Vercel (`https://<tu-proyecto>.vercel.app`, o varias separadas por comas) para que la pantalla pueda llamarlo.
+2. **Sus variables** (en el panel del servicio, nunca en el repositorio ni en un chat): `METABASE_URL`, `METABASE_API_KEY`, `METABASE_CARD_ID` y las demás de `backend/.env` que uses; `CLAVE_ACCESO` (o `GOOGLE_CLIENT_ID`); y `FRONTEND_URL` con la dirección de Vercel (`https://<tu-proyecto>.vercel.app`, o varias separadas por comas) para que la pantalla pueda llamarlo.
 3. **En Vercel**: *Settings → Environment Variables* → `REACT_APP_API_URL` = la dirección del backend terminada en `/api` (por ejemplo `https://ruteo-api.onrender.com/api`). El valor se mete en la app al compilarla, así que después hay que hacer *Redeploy*.
-4. **En el ID de cliente de OAuth de Google**, agrega la dirección de Vercel en *Orígenes de JavaScript autorizados*.
+4. **Solo si usas el login con Google**: en el ID de cliente de OAuth, agrega la dirección de Vercel en *Orígenes de JavaScript autorizados*.
 
 Sin Vercel también sirve: la imagen ya trae la pantalla, así que basta con abrir la dirección del backend.
 

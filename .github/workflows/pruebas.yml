@@ -90,7 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: docker build -t ruteo .
-      - name: Sin GOOGLE_CLIENT_ID ni SIN_LOGIN=1 no arranca
+      - name: Sin login (ni clave, ni Google, ni SIN_LOGIN=1) no arranca, ni con una clave corta
         run: |
           set +e
           salida=$(timeout 60 docker run --rm ruteo 2>&1); codigo=$?
@@ -98,6 +98,12 @@ jobs:
           echo "$salida"
           test "$codigo" -ne 0 && test "$codigo" -ne 124
           echo "$salida" | grep -F 'no arranca sin login' >/dev/null
+          set +e
+          salida=$(timeout 60 docker run --rm -e CLAVE_ACCESO=corta ruteo 2>&1); codigo=$?
+          set -e
+          echo "$salida"
+          test "$codigo" -ne 0 && test "$codigo" -ne 124
+          echo "$salida" | grep -F 'muy corta' >/dev/null
       - name: Con SIN_LOGIN=1, la imagen sirve la app y la API
         run: |
           docker run -d --name ruteo -p 8000:8000 -e SIN_LOGIN=1 ruteo
@@ -115,5 +121,17 @@ jobs:
           curl -sf localhost:8000/api/auth/config | grep -F 'prueba.apps.googleusercontent.com' >/dev/null
           curl -s -o /dev/null -D - -X OPTIONS localhost:8000/api/catalogo -H 'Origin: https://ruteo.vercel.app' \
             -H 'Access-Control-Request-Method: GET' | grep -Fi 'access-control-allow-origin: https://ruteo.vercel.app' >/dev/null
+          docker rm -f ruteo
+      - name: Con CLAVE_ACCESO, se entra con la clave y sin ella no
+        run: |
+          docker run -d --name ruteo -p 8000:8000 -e CLAVE_ACCESO=clave-de-prueba-larga ruteo
+          for i in $(seq 1 60); do curl -sf localhost:8000/api/health >/dev/null && break; sleep 1; done
+          curl -sf localhost:8000/api/auth/config | grep -F '"modo":"clave"' >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/catalogo)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/api/auth/entrar \
+            -H 'Content-Type: application/json' -d '{"clave":"otra-clave-cualquiera"}')" = 403
+          token=$(curl -sf -X POST localhost:8000/api/auth/entrar -H 'Content-Type: application/json' \
+            -d '{"clave":"clave-de-prueba-larga"}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')
+          curl -sf localhost:8000/api/catalogo -H "Authorization: Bearer $token" >/dev/null
       - if: failure()
         run: docker logs ruteo || true

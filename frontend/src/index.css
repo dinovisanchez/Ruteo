@@ -1123,7 +1123,7 @@ body {
   font-weight: 600;
 }
 
-/* Inicio de sesión con Google (solo en un servidor compartido) */
+/* Inicio de sesión con Google o con la clave de acceso (solo en un servidor compartido) */
 .login {
   min-height: 100vh;
   display: flex;
@@ -1158,6 +1158,12 @@ body {
 
 .login-button {
   min-height: 44px;
+}
+
+/* Con la clave de acceso en vez de Google */
+.login-clave {
+  width: 100%;
+  min-width: 260px;
 }
 
 .app-subtitle.sesion {

@@ -35,6 +35,8 @@ class Settings(BaseSettings):
 
     # Servidor compartido: login con Google (vacío = sin login, como en el Mac de cada coordinador)
     GOOGLE_CLIENT_ID: str = ""  # OAuth client id de tipo «Aplicación web» en Google Cloud
+    # O, sin Google Cloud, una clave de acceso compartida (12 caracteres o más); Google manda si están las dos
+    CLAVE_ACCESO: str = ""
     DOMINIOS_PERMITIDOS: List[str] = ["bia.app"]
     CORREOS_PERMITIDOS: List[str] = []  # Cuentas de fuera de esos dominios que también pueden entrar
     # La app compilada (npm run build); si existe, el gateway la sirve en / (vacío = frontend/build)

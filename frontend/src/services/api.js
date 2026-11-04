@@ -84,6 +84,12 @@ export const getAuthConfig = async () => {
   return response.data;
 };
 
+// On a server with CLAVE_ACCESO: the access key gives a session token (a wrong key answers 403)
+export const enterWithKey = async (clave) => {
+  const response = await apiClient.post('/auth/entrar', { clave });
+  return response.data.token;
+};
+
 /**
  * Get Metabase connection status (without credentials)
  * @returns {Promise<Object>} { configurado, servidor, autenticacion, card_id }

@@ -38,12 +38,14 @@ def pedir(cliente, valor=None):
 
 
 def test_sin_client_id_no_hay_login(cliente):
-    assert cliente.get("/api/auth/config").json() == {"google_client_id": None, "dominios": []}
+    assert cliente.get("/api/auth/config").json() == {"modo": None, "google_client_id": None, "dominios": []}
     assert pedir(cliente).status_code == 200
+    assert cliente.post("/api/auth/entrar", json={"clave": "x"}).status_code == 404
 
 
 def test_con_login_pide_una_cuenta_de_bia(con_login):
-    assert con_login.get("/api/auth/config").json() == {"google_client_id": CLIENTE, "dominios": ["bia.app"]}
+    assert con_login.get("/api/auth/config").json() == {"modo": "google", "google_client_id": CLIENTE,
+                                                        "dominios": ["bia.app"]}
     assert con_login.get("/api/health").status_code == 200
     assert pedir(con_login).status_code == 401
     assert pedir(con_login, token()).status_code == 200
@@ -92,3 +94,52 @@ def test_la_app_en_vercel_puede_llamar_a_la_api_y_otra_pagina_no(cliente):
     assert permiso("https://otra.example") == "https://otra.example"
     assert permiso("http://localhost:3000") == "http://localhost:3000"
     assert permiso("https://pagina-cualquiera.example") is None
+
+
+CLAVE = "una-clave-larga-de-prueba"
+
+
+@pytest.fixture
+def con_clave(monkeypatch, cliente):
+    monkeypatch.setattr(settings, "GOOGLE_CLIENT_ID", "")
+    monkeypatch.setattr(settings, "CLAVE_ACCESO", CLAVE)
+    monkeypatch.setattr(acceso, "_intentos", {})
+    return cliente
+
+
+def entrar(cliente, clave):
+    return cliente.post("/api/auth/entrar", json={"clave": clave})
+
+
+def test_con_clave_se_entra_sin_google(con_clave):
+    assert con_clave.get("/api/auth/config").json() == {"modo": "clave", "google_client_id": None, "dominios": []}
+    assert pedir(con_clave).status_code == 401
+    equivocada = entrar(con_clave, "otra-clave-cualquiera")
+    # 403 y no 401: la app toma un 401 como sesión vencida
+    assert equivocada.status_code == 403 and "no es correcta" in equivocada.json()["detail"]
+    respuesta = entrar(con_clave, CLAVE)
+    assert respuesta.status_code == 200
+    sesion = respuesta.json()["token"]
+    assert pedir(con_clave, sesion).status_code == 200
+    # La app muestra el nombre y sabe cuándo vence
+    datos = jwt.decode(sesion, options={"verify_signature": False})
+    assert datos["name"] == "Equipo Bia" and datos["exp"] - datos["iat"] == 12 * 3600
+
+
+def test_una_sesion_de_clave_no_sirve_si_la_clave_cambia_o_vence(con_clave, monkeypatch):
+    sesion = entrar(con_clave, CLAVE).json()["token"]
+    monkeypatch.setattr(settings, "CLAVE_ACCESO", "la-clave-nueva-del-equipo")
+    assert pedir(con_clave, sesion).status_code == 401
+    vencida = jwt.encode({"iss": "ruteo", "aud": "ruteo", "iat": 1, "exp": 2}, acceso._llave_clave(), algorithm="HS256")
+    respuesta = pedir(con_clave, vencida)
+    assert respuesta.status_code == 401 and "venció" in respuesta.json()["detail"]
+    # Ni un token firmado con otra llave ni uno de Google sirven en el modo de clave
+    assert pedir(con_clave, jwt.encode({"iss": "ruteo", "aud": "ruteo", "iat": 1, "exp": 2**31}, "x" * 32,
+                                       algorithm="HS256")).status_code == 401
+    assert pedir(con_clave, token()).status_code == 401
+
+
+def test_muchos_intentos_equivocados_hacen_esperar(con_clave):
+    for _ in range(acceso.INTENTOS_MAX):
+        assert entrar(con_clave, "no-es-la-clave").status_code == 403
+    assert entrar(con_clave, CLAVE).status_code == 429

@@ -66,7 +66,7 @@ flowchart LR
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
 | `resultados.py` | Guarda lo que sugiere cada plan de hoy en adelante (`registrar`, en `data/sugerencias.json`) y `/resultados` lo compara con lo que trae Metabase: aceptadas, cambiadas, pendientes |
-| `acceso.py` | Login con Google para un servidor compartido: con `GOOGLE_CLIENT_ID`, el middleware `ExigirCuenta` pide un token de Google válido de los dominios permitidos en cada `/api` (salvo `/api/health` y `/api/auth/config`) |
+| `acceso.py` | Login para un servidor compartido: con `GOOGLE_CLIENT_ID`, el middleware `ExigirCuenta` pide un token de Google válido de los dominios permitidos en cada `/api` (salvo `/api/health`, `/api/auth/config` y `/api/auth/entrar`); con `CLAVE_ACCESO`, `/api/auth/entrar` cambia la clave por una sesión HS256 de 12 h firmada con una llave que sale de la clave, con límite de intentos por dirección |
 | `archivo.py` | Lee un Excel (`.xlsx`) o CSV (coma o punto y coma, UTF-8 o latin-1) como filas de la pregunta; `/upload` las pasa por `filas_a_actividades` igual que Metabase |
 
 ### Optimizer (`backend/services/optimizer_service`, puerto 8003)
@@ -131,7 +131,7 @@ Cómo decide `asignar`:
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
 | `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
 | `services/sesion.js` | Sesión de «Iniciar sesión con Google» (token en `sessionStorage`) |
-| `components/Acceso.jsx` | Pide la cuenta de Google antes de mostrar la app cuando el servidor tiene login |
+| `components/Acceso.jsx` | Pide la cuenta de Google o la clave de acceso antes de mostrar la app cuando el servidor tiene login |
 | `components/ResultsDashboard.jsx` | Vista *Resultados*: lo sugerido frente a lo asignado |
 | `components/OlibiaModal.jsx` | *Para Olibia*: lo que falta llevar a Olibia, para copiar o descargar |
 | `services/plan.js` | Reglas del día que no dependen de la pantalla: qué OTs entran en un día, grupos de pendientes, cuándo el plan quedó viejo, filtros por persona |
@@ -229,7 +229,7 @@ Para que Ruteo asigne directo en Olibia hace falta la petición que hace Olibia 
 
 `Dockerfile` arma una sola imagen: compila la app con `REACT_APP_API_URL=/api` (misma dirección que la API) y corre `servidor.sh`, que arranca el optimizador en `127.0.0.1:8003` y el gateway en `0.0.0.0:$PORT` (8000). Los datos que cambian (`ASIGNACION_CONFIG_PATH`, `RESULTADOS_PATH`, `GEOCACHE_PATH`) van al volumen `/datos`. La configuración lleva una `version`: un guardado con una versión vieja recibe 409.
 
-`servidor.sh` no arranca sin `GOOGLE_CLIENT_ID` (salvo `SIN_LOGIN=1`). Si la pantalla se sirve en otra dirección (Vercel), se compila con `REACT_APP_API_URL=https://<backend>/api` y el backend la deja llamar con `FRONTEND_URL` (se suma a `CORS_ORIGINS`). Sin backend, `services/backend.js` arma el aviso según dónde está abierta la app.
+`servidor.sh` no arranca sin `CLAVE_ACCESO` (12 caracteres o más) ni `GOOGLE_CLIENT_ID` (salvo `SIN_LOGIN=1`). Si la pantalla se sirve en otra dirección (Vercel), se compila con `REACT_APP_API_URL=https://<backend>/api` y el backend la deja llamar con `FRONTEND_URL` (se suma a `CORS_ORIGINS`). Sin backend, `services/backend.js` arma el aviso según dónde está abierta la app.
 
 ## Pruebas
 

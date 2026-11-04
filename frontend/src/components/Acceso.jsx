@@ -1,8 +1,8 @@
 import React, {
   createContext, useCallback, useContext, useEffect, useRef, useState,
 } from 'react';
-import { Spin } from 'antd';
-import { getAuthConfig } from '../services/api';
+import { Button, Input, Spin } from 'antd';
+import { enterWithKey, getAuthConfig } from '../services/api';
 import {
   alVencerSesion, cerrarSesion, iniciarSesion, sesionActual,
 } from '../services/sesion';
@@ -65,9 +65,49 @@ const Login = ({ clientId, dominios, onCuenta, aviso }) => {
   );
 };
 
+// On a server with CLAVE_ACCESO instead of Google: the team's access key
+const LoginClave = ({ onCuenta, aviso }) => {
+  const [clave, setClave] = useState('');
+  const [entrando, setEntrando] = useState(false);
+  const [error, setError] = useState(null);
+  const entrar = async (evento) => {
+    evento.preventDefault();
+    if (!clave) return;
+    setEntrando(true);
+    setError(null);
+    try {
+      onCuenta(iniciarSesion(await enterWithKey(clave)));
+    } catch (e) {
+      setError(e.message);
+      setEntrando(false);
+    }
+  };
+  return (
+    <div className="login">
+      <form className="login-card" onSubmit={entrar}>
+        <img src={`${process.env.PUBLIC_URL}/bolt.png`} alt="" className="login-icon" />
+        <div className="login-title">Ruteo</div>
+        <div className="muted-text">Escribe la clave de acceso del equipo</div>
+        <Input.Password
+          autoFocus
+          value={clave}
+          onChange={(e) => setClave(e.target.value)}
+          placeholder="Clave de acceso"
+          autoComplete="current-password"
+          className="login-clave"
+        />
+        <Button type="primary" htmlType="submit" loading={entrando} disabled={!clave} block>Entrar</Button>
+        {aviso && !error && <div className="warn-text">{aviso}</div>}
+        {error && <div className="warn-text">{error}</div>}
+      </form>
+    </div>
+  );
+};
+
 /**
- * On a shared server (the backend has GOOGLE_CLIENT_ID), asks for the Bia Google account before
- * showing the app and again when the session expires. Without it, shows the app as always.
+ * On a shared server (the backend has GOOGLE_CLIENT_ID or CLAVE_ACCESO), asks for the Bia Google
+ * account or the team's access key before showing the app and again when the session expires.
+ * Without them, shows the app as always.
  */
 const Acceso = ({ children }) => {
   const [config, setConfig] = useState(undefined);
@@ -77,14 +117,18 @@ const Acceso = ({ children }) => {
   useEffect(() => {
     // Without a backend the app opens as always and says the backend is not running
     getAuthConfig()
-      .then((c) => setConfig(c.google_client_id ? c : null))
+      // An older backend does not send «modo»: it only had the Google login
+      .then((c) => {
+        const modo = c.modo === undefined ? (c.google_client_id ? 'google' : null) : c.modo;
+        setConfig(modo ? { ...c, modo } : null);
+      })
       .catch(() => setConfig(null));
   }, []);
   useEffect(() => {
     alVencerSesion(() => {
       cerrarSesion();
       setCuenta(null);
-      setAviso('La sesión venció o esa cuenta no puede entrar: vuelve a iniciar sesión');
+      setAviso('La sesión venció o ya no es válida: vuelve a entrar');
     });
   }, []);
   const salir = useCallback(() => {
@@ -102,6 +146,7 @@ const Acceso = ({ children }) => {
     return <div className="login"><Spin /></div>;
   }
   if (config && !cuenta) {
+    if (config.modo === 'clave') return <LoginClave onCuenta={alEntrar} aviso={aviso} />;
     return <Login clientId={config.google_client_id} dominios={config.dominios} onCuenta={alEntrar} aviso={aviso} />;
   }
   return (
