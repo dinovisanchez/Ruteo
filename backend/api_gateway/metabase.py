@@ -238,8 +238,11 @@ ESTADOS_APP = {
 }
 
 
-# Vencidas en Olibia («Vencida», «Cierre vencido», EXPIRED): no entran, como las canceladas
-VENCIDAS_APP = {"expired", "overdue"}
+# Vencidas en Olibia («Vencida», «Cierre vencido», «Vencimiento», «Expirada», EXPIRED, OVERDUE…): no
+# entran, como las canceladas. Se buscan en Situación, Estado, Estado app y cualquier columna cuyo
+# nombre diga estado, status o situación.
+PALABRAS_VENCIDA = ("vencid", "vencim", "expir", "caducad", "overdue")
+NOMBRES_COLUMNA_ESTADO = ("estado", "status", "situacion")
 NO_ENTRAN = ("descartada", "vencida")
 
 
@@ -247,26 +250,30 @@ def _clave_estado(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", normalizar_texto(texto)).strip()
 
 
-def _es_vencida(fila: Dict[str, Any], mapeo: Dict[str, str]) -> bool:
-    """Si Situación, Estado o Estado app dicen que la OT está vencida en Olibia"""
-    for campo in ("situacion", "estado", "estado_app"):
-        if campo in mapeo:
-            clave = _clave_estado(_texto(fila.get(mapeo[campo])))
-            if "vencid" in clave or clave in VENCIDAS_APP:
-                return True
-    return False
+def _columnas_estado(mapeo: Dict[str, str], columnas: List[str]) -> List[str]:
+    """Las columnas que dicen el estado de la OT: las reconocidas y cualquier otra que lo diga en el nombre"""
+    propias = [mapeo[c] for c in ("situacion", "estado", "estado_app") if c in mapeo]
+    otras = [c for c in columnas if c not in propias and any(n in _clave_columna(c) for n in NOMBRES_COLUMNA_ESTADO)]
+    return propias + otras
+
+
+def _valor_vencido(fila: Dict[str, Any], columnas_estado: List[str]) -> Optional[str]:
+    """El valor que dice que la OT está vencida en Olibia, o None"""
+    for columna in columnas_estado:
+        texto = _texto(fila.get(columna))
+        if texto and any(p in _clave_estado(texto) for p in PALABRAS_VENCIDA):
+            return texto
+    return None
 
 
 def _estado(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Tuple[str, Optional[str]]:
     """(estado, valor que no se reconoció) según «Situación» o, si no la trae, «Estado app».
 
-    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada), "descartada"
-    (cancelada o rechazada: no entra) o "vencida" (vencida en Olibia en cualquiera de las columnas de
-    estado: no entra aunque la Situación diga por asignar). Un archivo sin columnas de estado trae OTs
-    por asignar; un valor que no se reconoce se toma como por asignar, para que se vea, y se avisa.
+    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada) o "descartada"
+    (cancelada o rechazada: no entra); las vencidas se apartan antes (ver _valor_vencido). Un archivo
+    sin columnas de estado trae OTs por asignar; un valor que no se reconoce se toma como por asignar,
+    para que se vea, y se avisa.
     """
-    if _es_vencida(fila, mapeo):
-        return "vencida", None
     desconocido = None
     for campo, valores in (("situacion", SITUACIONES), ("estado_app", ESTADOS_APP)):
         if campo not in mapeo:
@@ -348,9 +355,19 @@ def filas_a_actividades(
         avisos.append(
             "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
         )
-    estados = {numero: _estado(fila, mapeo) for numero, fila in enumerate(filas, start=1)}
+    # Vencida en cualquiera de las columnas de estado: no entra, aunque la Situación diga por asignar
+    columnas_estado = _columnas_estado(mapeo, columnas)
+    estados: Dict[int, Tuple[str, Optional[str]]] = {}
+    valores_vencida: Counter = Counter()
+    for numero, fila in enumerate(filas, start=1):
+        valor = _valor_vencido(fila, columnas_estado)
+        if valor:
+            estados[numero] = ("vencida", None)
+            valores_vencida[valor] += 1
+        else:
+            estados[numero] = _estado(fila, mapeo)
     descartadas = sum(1 for estado, _ in estados.values() if estado == "descartada")
-    vencidas = sum(1 for estado, _ in estados.values() if estado == "vencida")
+    vencidas = sum(valores_vencida.values())
     # Por asignar con la fecha de visita ya pasada: también vencidas, no aplican
     hoy_iso = hoy().isoformat()
     pasadas = 0
@@ -364,7 +381,8 @@ def filas_a_actividades(
     if descartadas:
         avisos.append(f"OTs canceladas o rechazadas que no se cargan: {descartadas}")
     if vencidas:
-        avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas}")
+        valores = ", ".join(f"«{v}» ({n})" for v, n in valores_vencida.most_common(4))
+        avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas} ({valores})")
     if pasadas:
         avisos.append(f"OTs por asignar con la fecha de visita ya pasada (vencidas), que no se cargan: {pasadas}")
     if desconocidos:

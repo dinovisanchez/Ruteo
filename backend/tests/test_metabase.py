@@ -169,8 +169,27 @@ def test_las_vencidas_en_olibia_no_entran_aunque_digan_por_asignar():
         con_estados("CO6", A, "Asignada", "ASSIGNED", dia(1)),
     ])
     assert sorted(ots) == ["CO5", "CO6"]
-    assert "OTs vencidas en Olibia que no se cargan: 4" in avisos
+    aviso = next(a for a in avisos if a.startswith("OTs vencidas en Olibia que no se cargan: 4"))
+    # Dice qué valores quitó, para revisarlo contra Olibia
+    assert "«Vencida» (2)" in aviso and "«Cierre vencido» (1)" in aviso and "«EXPIRED» (1)" in aviso
     assert not any("no conoce" in a for a in avisos)
+
+
+@pytest.mark.parametrize("columna, valor", [
+    ("Estado", "Expirada"),
+    ("Estado", "VENCIMIENTO SLA"),
+    ("Estado", "Caducada"),
+    ("Estado app", "OVERDUE_ASSIGNMENT"),
+    # Una columna de estado con otro nombre también cuenta
+    ("Estado Olibia", "Vencida"),
+    ("status_visita", "expired"),
+])
+def test_las_vencidas_se_reconocen_escritas_de_varias_formas(columna, valor):
+    def con(codigo, texto):
+        return fila(codigo, int(codigo[2:]), dia(1), P, **{columna: texto})
+    ots, avisos = leer([con("CO1", valor), con("CO2", "Por asignar")])
+    assert sorted(ots) == ["CO2"]
+    assert any(a.startswith("OTs vencidas en Olibia que no se cargan: 1") and f"«{valor}»" in a for a in avisos)
 
 
 def test_una_visita_vencida_no_le_quita_el_codigo_a_la_nueva():
