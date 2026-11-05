@@ -150,6 +150,23 @@ def pregunta(card_id: int, x_api_key: Optional[str] = Header(None)):
     return FILAS
 
 
+@app.get("/api/database")
+def bases(x_api_key: Optional[str] = Header(None)):
+    """Las bases que ve la API key (para scripts/explorar_metabase.py --nombre)"""
+    if x_api_key != "test-key":
+        raise HTTPException(401, "Unauthenticated")
+    return {"data": [{"id": 2, "name": "DWH operaciones"}, {"id": 496, "name": "prod-electrician-visits"}]}
+
+
+@app.get("/api/table")
+def tablas(x_api_key: Optional[str] = Header(None)):
+    if x_api_key != "test-key":
+        raise HTTPException(401, "Unauthenticated")
+    return [{"id": 10, "db_id": 2, "schema": "operations", "name": "visitas_general", "display_name": "Visitas General"},
+            {"id": 20, "db_id": 496, "schema": "app", "name": "electrician_status_tracking",
+             "display_name": "Electrician Status Tracking"}]
+
+
 @app.post("/api/card")
 def crear_pregunta(pregunta: dict = Body(...), x_api_key: Optional[str] = Header(None)):
     """Crear una pregunta: solo la de desplazamientos, que queda con el número 45"""

@@ -6,6 +6,7 @@ Uso, desde la carpeta backend con el .venv activo:
     python -m scripts.explorar_metabase --tabla 22375
     python -m scripts.explorar_metabase --tabla 22375 --buscar
     python -m scripts.explorar_metabase --base 2344 --buscar
+    python -m scripts.explorar_metabase --nombre status_tracking   # en qué base y esquema está una tabla
 """
 import argparse
 import sys
@@ -71,14 +72,33 @@ def buscar_ubicacion(cliente: httpx.Client, base_id: int) -> None:
         print("  (ninguna; puede que la API key no tenga permiso sobre todas las tablas)")
 
 
+def buscar_tabla(cliente: httpx.Client, texto: str) -> None:
+    """En qué base y esquema está cada tabla cuyo nombre contiene `texto` (en todas las bases que ve la API key)"""
+    bases = {b["id"]: b.get("name", "") for b in _get(cliente, "/api/database").get("data", [])}
+    buscado = normalizar_texto(texto).replace(" ", "_")
+    tablas = [t for t in _get(cliente, "/api/table")
+              if buscado in normalizar_texto(t.get("name", "")).replace(" ", "_")
+              or buscado in normalizar_texto(t.get("display_name", "")).replace(" ", "_")]
+    print(f"Tablas con «{texto}» en el nombre ({len(tablas)}):")
+    for t in sorted(tablas, key=lambda t: (t.get("db_id"), t.get("schema") or "", t["name"])):
+        print(f"  base {t.get('db_id'):<6} {bases.get(t.get('db_id'), ''):35s} {t.get('schema')}.{t['name']}   (tabla {t['id']})")
+    if not tablas:
+        print("  (ninguna; puede que la API key no tenga permiso sobre esa base)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tabla", type=int, help="Id de la tabla (source-table en la URL de la pregunta)")
     parser.add_argument("--base", type=int, help="Id de la base de datos (database en la URL de la pregunta)")
     parser.add_argument("--buscar", action="store_true", help="Buscar columnas de dirección o coordenadas en la base")
+    parser.add_argument("--nombre", help="Buscar en todas las bases las tablas cuyo nombre contiene este texto")
     args = parser.parse_args()
+    if args.nombre:
+        with _cliente() as cliente:
+            buscar_tabla(cliente, args.nombre)
+        return
     if not args.tabla and not args.base:
-        parser.error("Indica --tabla, --base o ambos")
+        parser.error("Indica --tabla, --base, --nombre o una combinación")
 
     with _cliente() as cliente:
         base_id = args.base
