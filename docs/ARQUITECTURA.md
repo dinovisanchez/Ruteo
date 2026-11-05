@@ -61,7 +61,7 @@ flowchart LR
 |---|---|
 | `main.py` | Crea la app, CORS, el chequeo de host (`ALLOWED_HOSTS`), el login (`acceso.py`), `/api/health` y monta los routers bajo `/api`. Si existe la app compilada (`frontend/build` o `FRONTEND_DIR`), la sirve en `/` |
 | `assignment_routes.py` | Endpoints del plan: Metabase, archivo (`/upload`), catálogo, configuración, `/asignar`, `/asignar/lote`, trazado. Aquí está `plan_del_dia` (qué OTs entran el día elegido y a quién quedan fijadas) y el reconocimiento de técnicos por nombre (`responsables`, `tecnicos_mencionados`) |
-| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. `_estado` lee *Situación* / *Estado app* por valor exacto (`SITUACIONES`, `ESTADOS_APP`) y `_momento` pasa fechas con zona a la hora de Colombia |
+| `metabase.py` | Llama a la pregunta de Metabase y convierte cada fila en una OT (`filas_a_actividades`). `ALIAS_COLUMNAS` define qué nombres de columna reconoce: situación, fecha, electricistas, creado por, etc. Cada fila es una visita: `_codigos_por_fila` elige la visita vigente de cada OT (la que sigue por asignar o la más reciente) y nombra las anteriores con su fecha. `_estado` lee *Situación* / *Estado app* por valor exacto (`SITUACIONES`, `ESTADOS_APP`), `_valor_vencido` aparta las vencidas en cualquier columna de estado y `_momento` pasa fechas con zona a la hora de Colombia. `unir_desplazamientos` pone en cada OT dónde y cuándo dio el técnico «Desplazamiento OK», desde la pregunta de `METABASE_DESPLAZAMIENTOS_CARD_ID` (`ALIAS_DESPLAZAMIENTOS`), unida por «Id visita» |
 | `geocoding.py` | Ubica las OTs sin GPS con Nominatim o, con `GOOGLE_GEOCODING_API_KEY`, con Google: municipio enseguida, dirección (normalizada con `normalizar_direccion`) en segundo plano, con caché en `data/geocache.json` y una consulta por segundo para Nominatim. Las que solo dan la calle o el municipio llevan `ubicacion_imprecisa` y no cuentan como cerca de nada; las no encontradas se reintentan a los 7 días |
 | `trazado.py` | Habla con OSRM: matriz de tiempos por carretera (`matriz_vial`) y trazado de cada ruta (`trazar`), con servidor de respaldo y caché |
 | `utilizacion.py` | `/utilizacion`: horas usadas por técnico y día frente a las disponibles (UTR) |
@@ -130,6 +130,7 @@ Cómo decide `asignar`:
 | `services/osrm.js` | OSRM desde el navegador, de respaldo |
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
 | `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
+| `services/desplazamiento.js` | Dónde y cuándo se dio «Desplazamiento OK» en cada CO: la hora, los km a la dirección (más de 1 km, en naranja) y el enlace a Google Maps |
 | `services/sesion.js` | Sesión de «Iniciar sesión con Google» (token en `sessionStorage`) |
 | `components/Acceso.jsx` | Pide la cuenta de Google o la clave de acceso antes de mostrar la app cuando el servidor tiene login |
 | `components/ResultsDashboard.jsx` | Vista *Resultados*: lo sugerido frente a lo asignado |

@@ -3,6 +3,8 @@
 La pregunta 44 trae lo mismo que la pregunta real (docs/pregunta_metabase.sql), con fechas relativas a
 hoy: pendientes sin fecha y con fecha, asignadas a técnicos de Bia y a contratistas, visitas cerradas
 de los últimos 30 días, una OT con varias visitas, OTs cercanas entre sí y asignadas cerca de pendientes.
+La pregunta 45 es la de desplazamientos (los IN_ROUTE de la app de técnicos), unida por «Id visita»; y se
+pueden crear preguntas (POST /api/card), como hace scripts/crear_pregunta_desplazamientos.py.
 Los clientes, direcciones y coordenadas son inventados.
 """
 import math
@@ -10,7 +12,7 @@ import random
 from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException
 
 app = FastAPI()
 HOY = date.today()
@@ -120,19 +122,43 @@ for dias_atras in range(1, 31):
                     "Bogotá" if bogota else "Barranquilla", round(lat + random.uniform(-.06, .06), 6),
                     round(lon + random.uniform(-.06, .06), 6), "Enel" if bogota else "Air-e", estado="Cierre Exitoso")
 
-# Quién creó cada OT y cuándo
+# Quién creó cada OT y cuándo, y el id de la visita en la app de técnicos
 for n, fila in enumerate(FILAS):
     fila["Creado por"] = ["Ana María Torres", "Camilo Rojas", "Diana Pérez"][n % 3]
     fila["Fecha de creación"] = f"{HOY - timedelta(days=1 + n % 9)}T10:15:00"
+    fila["Id visita"] = 700000 + n
+
+# Pregunta 45: dónde dieron «Desplazamiento OK» (en UTC, como la app de técnicos). Edicson cerca de su
+# OT de hoy en Chicó; Jhonatan a unos 3 km de la suya en Barranquilla
+_VISITA = {f["Bia Code"]: f["Id visita"] for f in FILAS}
+DESPLAZAMIENTOS = [
+    {"Id visita": _VISITA["CO1000000001"], "Fecha desplazamiento": f"{HOY}T18:52:00Z",
+     "Latitud desplazamiento": 4.6789, "Longitud desplazamiento": -74.0466},
+    {"Id visita": _VISITA["CO0200000021"], "Fecha desplazamiento": f"{HOY}T17:40:00Z",
+     "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80},
+]
 
 
 @app.post("/api/card/{card_id}/query/json")
 def pregunta(card_id: int, x_api_key: Optional[str] = Header(None)):
     if x_api_key != "test-key":
         raise HTTPException(401, "Unauthenticated")
+    if card_id == 45:
+        return DESPLAZAMIENTOS
     if card_id != 44:
         raise HTTPException(404, "Not found")
     return FILAS
+
+
+@app.post("/api/card")
+def crear_pregunta(pregunta: dict = Body(...), x_api_key: Optional[str] = Header(None)):
+    """Crear una pregunta: solo la de desplazamientos, que queda con el número 45"""
+    if x_api_key != "test-key":
+        raise HTTPException(401, "Unauthenticated")
+    consulta = pregunta["dataset_query"]
+    if consulta["database"] != 496 or "IN_ROUTE" not in consulta["native"]["query"]:
+        raise HTTPException(400, "Solo se simula la pregunta de desplazamientos")
+    return {"id": 45, "name": pregunta["name"]}
 
 
 @app.get("/search")

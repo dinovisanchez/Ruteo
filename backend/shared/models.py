@@ -48,6 +48,9 @@ class Activity(BaseModel):
     # Quién creó la OT y cuándo (YYYY-MM-DD), si la pregunta lo trae
     creado_por: Optional[str] = None
     fecha_creacion: Optional[str] = None
+    # Dónde y cuándo el técnico dio «Desplazamiento OK» en Olibia, si la pregunta lo trae
+    desplazamiento_ok: Optional[GPSCoordinates] = None
+    desplazamiento_ok_en: Optional[str] = None  # YYYY-MM-DD HH:MM (hora de Colombia) o YYYY-MM-DD
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""

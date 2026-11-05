@@ -93,6 +93,19 @@ Sirven como indicadores del proyecto: porcentaje de OTs que se asignan como reco
 
 **Para Olibia.** Ruteo todavía no escribe en Olibia. En la lista del día, **Para Olibia (N)** junta lo que falta llevar allá: las sugeridas, las elegidas a mano y las reasignadas, con fecha, hora estimada, ciudad, dirección y a quién asignarlas. Respeta los filtros (por ejemplo, un OR). **Copiar** las deja listas para pegar en una hoja de cálculo y **Descargar CSV** las guarda. Cuando se asignan en Olibia, en la siguiente actualización aparecen como asignadas.
 
+### Desplazamiento OK de cada CO
+
+Cada CO asignada muestra dónde y a qué hora el técnico dio **«Desplazamiento OK»** en la app de técnicos («Desplazamiento OK 08:52 · a 0,2 km de la dirección · ver»; *ver* abre el punto en Google Maps). Si fue a más de 1 km de la dirección de la OT, la línea sale en naranja. En el *Mapa* es un rombo con el color de la ruta, unido a su parada; y el CSV de la lista lleva la hora y los km.
+
+El dato está en la base de la app de técnicos (en Metabase, la base **496**, tabla `electrician_status_tracking`, estado `IN_ROUTE`), que no es la de la pregunta de Ruteo, así que va en **otra pregunta** y Ruteo las une por el id de la visita:
+
+1. **Crear la pregunta de desplazamientos**: en el Mac, desde `backend`, `.venv/bin/python -m scripts.crear_pregunta_desplazamientos`. La crea con la API key de `backend/.env`, la prueba y dice su número. Si la API key no puede crear preguntas, `--sql` muestra el SQL para pegarlo en una pregunta nueva de SQL nativo sobre la base 496; luego `--revisar <número>` la prueba.
+2. **Agregar «Id visita» a la pregunta de Ruteo**: el id de la visita de la app de técnicos (el mismo `visit_id`), con ese nombre. `--revisar` dice cuántas OTs se unen.
+3. **Poner su número** en `METABASE_DESPLAZAMIENTOS_CARD_ID` en `backend/.env` (y en el servidor) y volver a correr `./iniciar.sh`.
+4. **Revisar la hora**: el comando muestra las horas de los últimos desplazamientos tal como llegan. Si terminan en `Z` o `+00:00`, Ruteo las pasa a la hora de Colombia; si salen 5 horas adelante sin eso, el comentario del SQL dice cómo corregirlo.
+
+Si la pregunta de Ruteo está en la misma base, también sirve traer el dato en ella: columnas `Latitud desplazamiento`/`Longitud desplazamiento` (o `Ubicación desplazamiento` como «lat, lon») y `Fecha desplazamiento`. Si las preguntas no se pueden unir, el panel lo avisa y las OTs cargan igual.
+
 ### Tiempos de desplazamiento y de cada visita
 
 - **Por las vías.** El tiempo entre dos puntos es el de la ruta por carretera según OSRM (una consulta de tabla por plan, guardada en memoria). Si OSRM no responde, se estima con la línea recta × *factor vial*: los primeros 15 km a la velocidad en ciudad y el resto a 60 km/h.
@@ -147,6 +160,9 @@ SELECT
   department AS "Departamento",
   wo_generate_by AS "Creado por",
   created_at AS "Fecha de creación"
+  -- Para unir la pregunta de desplazamientos (ver «Desplazamiento OK de cada CO» en el README), agrega el id
+  -- de la visita de la app de técnicos (el mismo visit_id de electrician_status_tracking), por ejemplo:
+  -- , <columna del id de la visita> AS "Id visita"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
   -- Ni canceladas ni de cierre vencido (Olibia las cuenta aparte)

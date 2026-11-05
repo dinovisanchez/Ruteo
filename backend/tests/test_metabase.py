@@ -205,3 +205,28 @@ def test_una_visita_cancelada_no_le_quita_el_codigo_a_la_vigente():
 def test_un_archivo_sin_columnas_de_estado_trae_pendientes():
     actividades, _, avisos = metabase.filas_a_actividades([{"Bia Code": "X1", "OR": "Enel", "Dirección": "Calle 1"}], {})
     assert actividades[0].situacion == "pendiente" and avisos == []
+
+
+def test_ubicacion_y_hora_del_desplazamiento_ok():
+    ots, _ = leer([
+        fila("CO1", 1, dia(0), A, **{"Latitud desplazamiento": "4,6790", "Longitud desplazamiento": -74.047,
+                                     "Fecha desplazamiento": f"{dia(0)}T13:52:00Z"}),
+        # Sin datos del desplazamiento, o con coordenadas fuera de Colombia: no hay ubicación
+        fila("CO2", 2, dia(0), A, **{"Latitud desplazamiento": None, "Longitud desplazamiento": None,
+                                     "Fecha desplazamiento": None}),
+        fila("CO3", 3, dia(0), A, **{"Latitud desplazamiento": 40.4, "Longitud desplazamiento": -3.7,
+                                     "Fecha desplazamiento": dia(0)}),
+    ])
+    co1 = ots["CO1"]
+    assert (co1.desplazamiento_ok.latitude, co1.desplazamiento_ok.longitude) == (4.679, -74.047)
+    # En UTC se pasa a la hora de Colombia
+    assert co1.desplazamiento_ok_en == f"{dia(0)} 08:52"
+    assert ots["CO2"].desplazamiento_ok is None and ots["CO2"].desplazamiento_ok_en is None
+    assert ots["CO3"].desplazamiento_ok is None and ots["CO3"].desplazamiento_ok_en == dia(0)
+
+
+def test_desplazamiento_ok_en_una_sola_columna_de_gps():
+    ots, _ = leer([fila("CO1", 1, dia(0), A, **{"GPS desplazamiento OK": "4.6790, -74.0470"})])
+    assert (ots["CO1"].desplazamiento_ok.latitude, ots["CO1"].desplazamiento_ok.longitude) == (4.679, -74.047)
+    # La ubicación de la OT no se confunde con la del desplazamiento
+    assert ots["CO1"].coordinates is None

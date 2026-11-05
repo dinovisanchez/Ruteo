@@ -27,6 +27,9 @@ SELECT
   department AS "Departamento",
   wo_generate_by AS "Creado por",
   created_at AS "Fecha de creación"
+  -- Para unir la pregunta de desplazamientos (ver «Desplazamiento OK de cada CO» en el README), agrega el id
+  -- de la visita de la app de técnicos (el mismo visit_id de electrician_status_tracking), por ejemplo:
+  -- , <columna del id de la visita> AS "Id visita"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
   AND COALESCE(estado, '') NOT ILIKE '%cancel%'

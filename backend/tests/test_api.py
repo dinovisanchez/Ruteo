@@ -135,3 +135,37 @@ def test_utilizacion_de_la_semana(con_metabase):
     # La OT de Carlos cuenta para él; la del contratista no le suma a nadie de Bia
     assert por_tecnico["Carlos Salas"]["usado_min"] > 0
     assert por_tecnico["Juan Reyes"]["usado_min"] > 0  # la cerrada ocupó su tiempo
+
+
+def test_ots_con_la_pregunta_de_desplazamientos(monkeypatch, cliente):
+    from shared.config import settings
+    ots = [fila("ASIG1", "Asignada", f"{dia(0)}T10:00:00", 4.681, -74.051, **{"Id visita": 501}),
+           fila("ASIG2", "Asignada", f"{dia(0)}T11:00:00", 4.650, -74.090, **{"Id visita": 502}),
+           fila("PEND1", "Pendiente por asignar", f"{dia(0)}T09:00:00", 4.680, -74.050, **{"Id visita": None})]
+    # Como la consulta de la base de la app de técnicos: visit_id, latitude, longitude y la hora
+    desplazamientos = [
+        {"visit_id": "501", "hora_marcado": f"{dia(0)}T13:30:00Z", "latitude": 4.6815, "longitude": -74.0512},
+        # El último desplazamiento de la visita es el que vale
+        {"visit_id": "501", "hora_marcado": f"{dia(0)}T14:52:00Z", "latitude": 4.6812, "longitude": -74.0511},
+        {"visit_id": "999", "hora_marcado": f"{dia(0)}T12:00:00Z", "latitude": 4.6, "longitude": -74.0},
+    ]
+
+    async def pregunta(card_id):
+        return [dict(f) for f in (desplazamientos if str(card_id) == "77" else ots)]
+
+    monkeypatch.setattr(metabase, "consultar_pregunta", pregunta)
+    monkeypatch.setattr(settings, "METABASE_DESPLAZAMIENTOS_CARD_ID", "77")
+    datos = cliente.get("/api/metabase/ots").json()
+    por_codigo = {a["codigo_bia"]: a for a in datos["actividades"]}
+    assert por_codigo["ASIG1"]["desplazamiento_ok"] == {"latitude": 4.6812, "longitude": -74.0511}
+    assert por_codigo["ASIG1"]["desplazamiento_ok_en"] == f"{dia(0)} 09:52"
+    assert por_codigo["ASIG2"]["desplazamiento_ok"] is None and por_codigo["PEND1"]["desplazamiento_ok"] is None
+    assert not any("desplazamientos" in a for a in datos["avisos"])
+
+    # Si no se pueden unir, el panel lo dice y las OTs cargan igual
+    desplazamientos[:] = [{"visit_id": "999", "latitude": 4.6, "longitude": -74.0}]
+    datos = cliente.get("/api/metabase/ots").json()
+    assert len(datos["actividades"]) == 3
+    assert any("ninguna es de las OTs cargadas" in a for a in datos["avisos"])
+    desplazamientos[:] = [{"tecnico": "Ana", "latitude": 4.6, "longitude": -74.0}]
+    assert any("agrega «Id visita»" in a for a in cliente.get("/api/metabase/ots").json()["avisos"])

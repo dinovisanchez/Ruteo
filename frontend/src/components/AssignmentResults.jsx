@@ -2,7 +2,9 @@ import React, { useMemo, useState } from 'react';
 import {
   Table, Collapse, Button, Tooltip, Descriptions, Select,
 } from 'antd';
-import { DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined } from '@ant-design/icons';
+import {
+  AimOutlined, DownloadOutlined, EnvironmentOutlined, LockOutlined, EditOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import AssignmentMapView, { ROUTE_COLORS } from './AssignmentMapView';
 import OlibiaModal from './OlibiaModal';
@@ -10,6 +12,7 @@ import { paraOlibia } from '../services/plan';
 import { columnaCerca } from './AsignadasCerca';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
+import { desplazamientoOk, textoDesplazamiento } from '../services/desplazamiento';
 
 const km = (value) => (value ?? 0).toLocaleString('es-CO', { maximumFractionDigits: 1 });
 const hhmm = (value) => (value ? value.slice(0, 5) : '');
@@ -43,6 +46,25 @@ const origenDecision = (d, editada, cerrada = false) => {
   return d.situacion === 'asignada' ? 'Asignada en Metabase' : 'Sugerido por Ruteo';
 };
 
+// Where and when the technician gave «Desplazamiento OK», in orange if it was far from the address
+const DesplazamientoOk = ({ actividad }) => {
+  const d = desplazamientoOk(actividad);
+  if (!d) return null;
+  return (
+    <div className={`ot-cell-sub ot-desplazamiento${d.lejos ? ' lejos' : ''}`}>
+      <AimOutlined />
+      {' '}
+      {textoDesplazamiento(d)}
+      {d.mapa && (
+        <>
+          {' · '}
+          <a href={d.mapa} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>ver</a>
+        </>
+      )}
+    </div>
+  );
+};
+
 const otCell = (actividad, codigo, nuevas) => (
   <div className="ot-cell">
     <span className="ot-code">{codigo}</span>
@@ -58,6 +80,7 @@ const otCell = (actividad, codigo, nuevas) => (
         Creada por {actividad.creado_por}{actividad.fecha_creacion ? ` el ${dayjs(actividad.fecha_creacion).format('D MMM')}` : ''}
       </div>
     )}
+    <DesplazamientoOk actividad={actividad} />
   </div>
 );
 
@@ -115,15 +138,20 @@ const exportCsv = (rows, dia) => {
   // ";" and decimal comma so it opens directly in Excel configured in Spanish
   const header = ['Día', 'OT', 'Situación', 'OR', 'Ciudad', 'Dirección', 'Tipo de OT', 'Personas', 'Enviar a', 'Responsable',
     'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Creada por',
-    'Fecha de creación', 'Motivo', ...extraKeys];
-  const lines = rows.map(({ decision: d, actividad: a, parada }) => [
-    dia, d.codigo_bia, d.situacion === 'asignada' ? 'Asignada' : 'Por asignar', a?.or_operador, a?.ciudad, a?.direccion,
-    a?.servicio, a?.personas_requeridas, DESTINO[d.enviar_a], d.responsable, d.fijada ? 'Sí' : 'No', d.sede,
-    d.distancia_base_km === null || d.distancia_base_km === undefined ? '' : String(d.distancia_base_km).replace('.', ','),
-    parada?.secuencia, hhmm(parada?.hora_llegada_estimada), hhmm(parada?.hora_salida_estimada),
-    a?.coordenadas_aproximadas ? 'Sí' : 'No', a?.creado_por, a?.fecha_creacion, d.motivo,
-    ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
-  ]);
+    'Fecha de creación', 'Desplazamiento OK', 'Km del desplazamiento a la dirección', 'Motivo', ...extraKeys];
+  const lines = rows.map(({ decision: d, actividad: a, parada }) => {
+    const kmDesplazamiento = desplazamientoOk(a)?.km;
+    return [
+      dia, d.codigo_bia, d.situacion === 'asignada' ? 'Asignada' : 'Por asignar', a?.or_operador, a?.ciudad, a?.direccion,
+      a?.servicio, a?.personas_requeridas, DESTINO[d.enviar_a], d.responsable, d.fijada ? 'Sí' : 'No', d.sede,
+      d.distancia_base_km === null || d.distancia_base_km === undefined ? '' : String(d.distancia_base_km).replace('.', ','),
+      parada?.secuencia, hhmm(parada?.hora_llegada_estimada), hhmm(parada?.hora_salida_estimada),
+      a?.coordenadas_aproximadas ? 'Sí' : 'No', a?.creado_por, a?.fecha_creacion, a?.desplazamiento_ok_en,
+      kmDesplazamiento === null || kmDesplazamiento === undefined ? '' : String(kmDesplazamiento).replace('.', ','),
+      d.motivo,
+      ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
+    ];
+  });
   const csv = [header, ...lines].map((row) => row.map(csvValue).join(';')).join('\n');
   const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);

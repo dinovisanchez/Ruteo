@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     METABASE_USERNAME: str = ""
     METABASE_PASSWORD: str = ""
     METABASE_CARD_ID: str = ""  # Id de la pregunta por defecto (el número en /question/123-...)
+    # Opcional: la pregunta con los «Desplazamiento OK» (IN_ROUTE) y su ubicación, en la base de la app de
+    # técnicos; se une a las OTs por el id de la visita (scripts/crear_pregunta_desplazamientos.py la crea)
+    METABASE_DESPLAZAMIENTOS_CARD_ID: str = ""
     # JSON opcional campo → columna de Metabase, ej. {"codigo_bia": "OT", "or_operador": "Operador"}
     METABASE_COLUMN_MAP: str = ""
 

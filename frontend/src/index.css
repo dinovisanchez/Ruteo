@@ -554,6 +554,11 @@ body {
   color: var(--label-3);
 }
 
+/* Dónde y cuándo el técnico dio «Desplazamiento OK»; en naranja si fue lejos de la dirección */
+.ot-desplazamiento.lejos {
+  color: #C93400;
+}
+
 .new-badge {
   margin-left: 6px;
   font-size: 11px;
@@ -980,6 +985,29 @@ body {
 
 .stop-dot.asignada {
   border-radius: 6px;
+}
+
+/* En el mapa, donde el técnico dio «Desplazamiento OK» (rombo con el color de su ruta) */
+.desplazamiento-dot {
+  width: 10px;
+  height: 10px;
+  margin: 2px;
+  background: #FFFFFF;
+  border: 3px solid #8E8E93;
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.desplazamiento-dot.lejos {
+  background: #FF9500;
+}
+
+.desplazamiento-dot.leyenda {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-width: 2px;
 }
 
 .map-popup {
