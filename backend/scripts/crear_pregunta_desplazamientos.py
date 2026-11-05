@@ -27,8 +27,8 @@ BASE_APP_TECNICOS = 496
 NOMBRE = "Ruteo · Desplazamientos OK (IN_ROUTE)"
 
 SQL = """-- Ruteo · Desplazamientos: el último «Desplazamiento OK» (IN_ROUTE) de cada visita, con su ubicación.
--- Ruteo la une a sus OTs por «Id visita». Si la hora sale 5 horas adelante (UTC), cambia las dos
--- COALESCE(t.created_at_app, t.created_at) por (COALESCE(t.created_at_app, t.created_at) - INTERVAL '5 hours').
+-- Ruteo la une a sus OTs por «Id visita». Si la hora sale 5 horas adelante (UTC), cambia la línea de
+-- «Fecha desplazamiento» por: (COALESCE(t.created_at_app, t.created_at) - INTERVAL '5 hours') AS "Fecha desplazamiento",
 SELECT DISTINCT ON (t.visit_id)
   t.visit_id                                AS "Id visita",
   COALESCE(t.created_at_app, t.created_at)  AS "Fecha desplazamiento",
