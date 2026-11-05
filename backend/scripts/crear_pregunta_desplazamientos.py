@@ -9,6 +9,7 @@ Uso, desde la carpeta backend:
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos           # la crea y la prueba
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos --sql     # solo el SQL, para pegarlo a mano
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos --revisar 12345   # prueba una ya creada
+    .venv/bin/python -m scripts.crear_pregunta_desplazamientos --tabla app.electrician_status_tracking  # con esquema
 """
 import argparse
 import sys
@@ -34,7 +35,7 @@ SELECT DISTINCT ON (t.visit_id)
   COALESCE(t.created_at_app, t.created_at)  AS "Fecha desplazamiento",
   t.latitude                                AS "Latitud desplazamiento",
   t.longitude                               AS "Longitud desplazamiento"
-FROM electrician_status_tracking t
+FROM __TABLA__ t
 WHERE t.deleted_at IS NULL
   AND t.electrician_status = 'IN_ROUTE'
   AND t.latitude IS NOT NULL AND t.latitude <> 0
@@ -43,17 +44,22 @@ ORDER BY t.visit_id, COALESCE(t.created_at_app, t.created_at) DESC
 """
 
 
-def sql(dias: int) -> str:
-    return SQL.replace("__DIAS__", str(int(dias)))
+TABLA = "electrician_status_tracking"
 
 
-def crear(cliente: httpx.Client, base: int, dias: int, coleccion: Optional[int]) -> int:
+def sql(dias: int, tabla: str = TABLA) -> str:
+    if not all(parte.replace("_", "").isalnum() for parte in tabla.split(".")):
+        sys.exit(f"Nombre de tabla no válido: {tabla} (usa esquema.tabla, solo letras, números y _)")
+    return SQL.replace("__DIAS__", str(int(dias))).replace("__TABLA__", tabla)
+
+
+def crear(cliente: httpx.Client, base: int, dias: int, coleccion: Optional[int], tabla: str) -> int:
     pregunta = {
         "name": NOMBRE,
         "description": "La usa Ruteo para mostrar en cada CO dónde y cuándo el técnico dio «Desplazamiento OK».",
         "display": "table",
         "visualization_settings": {},
-        "dataset_query": {"type": "native", "database": base, "native": {"query": sql(dias), "template-tags": {}}},
+        "dataset_query": {"type": "native", "database": base, "native": {"query": sql(dias, tabla), "template-tags": {}}},
         "collection_id": coleccion,
     }
     respuesta = cliente.post("/api/card", json=pregunta)
@@ -117,16 +123,18 @@ def main() -> None:
     parser.add_argument("--base", type=int, default=BASE_APP_TECNICOS, help=f"Base de la app de técnicos ({BASE_APP_TECNICOS})")
     parser.add_argument("--dias", type=int, default=7, help="Cuántos días atrás trae (7)")
     parser.add_argument("--coleccion", type=int, help="Id de la colección donde guardarla (por defecto, la raíz)")
+    parser.add_argument("--tabla", default=TABLA,
+                        help=f"La tabla de estados de los técnicos, con su esquema si hace falta ({TABLA})")
     args = parser.parse_args()
 
     if args.sql:
-        print(sql(args.dias))
+        print(sql(args.dias, args.tabla))
         return
     with _cliente() as cliente:
         if args.revisar:
             revisar(cliente, args.revisar)
             return
-        card_id = crear(cliente, args.base, args.dias, args.coleccion)
+        card_id = crear(cliente, args.base, args.dias, args.coleccion, args.tabla)
         print(f"Creé la pregunta «{NOMBRE}» con el número {card_id}.\n")
         revisar(cliente, card_id)
         print(f"\nPon en backend/.env (y en Render → Environment):  METABASE_DESPLAZAMIENTOS_CARD_ID={card_id}")
