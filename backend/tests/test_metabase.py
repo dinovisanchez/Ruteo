@@ -230,3 +230,17 @@ def test_desplazamiento_ok_en_una_sola_columna_de_gps():
     assert (ots["CO1"].desplazamiento_ok.latitude, ots["CO1"].desplazamiento_ok.longitude) == (4.679, -74.047)
     # La ubicación de la OT no se confunde con la del desplazamiento
     assert ots["CO1"].coordinates is None
+
+
+def test_la_hora_del_desplazamiento_sin_zona_es_utc(monkeypatch):
+    from shared.config import settings
+    # Así llega de la app de técnicos: UTC, con milésimas y sin zona
+    assert metabase.hora_desplazamiento("2026-11-05T19:27:12.035") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento("2026-11-05 02:10:00") == ("2026-11-04", "21:10")
+    # Con zona se respeta la que trae
+    assert metabase.hora_desplazamiento("2026-11-05T19:27:00Z") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento("2026-11-05T14:27:00-05:00") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento(None) == (None, None)
+    # Si la pregunta ya las trae en hora de Colombia
+    monkeypatch.setattr(settings, "DESPLAZAMIENTOS_EN_UTC", False)
+    assert metabase.hora_desplazamiento("2026-11-05T14:27:12") == ("2026-11-05", "14:27")

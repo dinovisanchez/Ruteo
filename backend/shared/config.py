@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # Opcional: la pregunta con los «Desplazamiento OK» (IN_ROUTE) y su ubicación, en la base de la app de
     # técnicos; se une a las OTs por el id de la visita (scripts/crear_pregunta_desplazamientos.py la crea)
     METABASE_DESPLAZAMIENTOS_CARD_ID: str = ""
+    # La app de técnicos guarda las horas en UTC y Metabase las manda sin zona: se pasan a la hora de Colombia.
+    # false si la pregunta ya las trae en hora de Colombia
+    DESPLAZAMIENTOS_EN_UTC: bool = True
     # JSON opcional campo → columna de Metabase, ej. {"codigo_bia": "OT", "or_operador": "Operador"}
     METABASE_COLUMN_MAP: str = ""
 

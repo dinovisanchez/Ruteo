@@ -128,13 +128,13 @@ for n, fila in enumerate(FILAS):
     fila["Fecha de creación"] = f"{HOY - timedelta(days=1 + n % 9)}T10:15:00"
     fila["Id visita"] = 700000 + n
 
-# Pregunta 45: dónde dieron «Desplazamiento OK» (en UTC, como la app de técnicos). Edicson cerca de su
+# Pregunta 45: dónde dieron «Desplazamiento OK» (en UTC y sin zona, como la app de técnicos). Edicson cerca de su
 # OT de hoy en Chicó; Jhonatan a unos 3 km de la suya en Barranquilla
 _VISITA = {f["Bia Code"]: f["Id visita"] for f in FILAS}
 DESPLAZAMIENTOS = [
-    {"Id visita": _VISITA["CO1000000001"], "Fecha desplazamiento": f"{HOY}T18:52:00Z",
+    {"Id visita": _VISITA["CO1000000001"], "Fecha desplazamiento": f"{HOY}T18:52:00.035",
      "Latitud desplazamiento": 4.6789, "Longitud desplazamiento": -74.0466},
-    {"Id visita": _VISITA["CO0200000021"], "Fecha desplazamiento": f"{HOY}T17:40:00Z",
+    {"Id visita": _VISITA["CO0200000021"], "Fecha desplazamiento": f"{HOY}T17:40:00",
      "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80},
 ]
 

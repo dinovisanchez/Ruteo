@@ -476,6 +476,16 @@ def _llave(valor: Any) -> str:
     return texto[:-2] if texto.endswith(".0") and texto[:-2].isdigit() else texto
 
 
+def hora_desplazamiento(valor: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(fecha, hora) en Colombia de un desplazamiento. La app de técnicos guarda la hora en UTC y Metabase
+    la manda sin zona («2026-11-05T19:27:12.035»): sin zona se toma como UTC (DESPLAZAMIENTOS_EN_UTC)"""
+    texto = _texto(valor)
+    if (settings.DESPLAZAMIENTOS_EN_UTC and re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", texto)
+            and not re.search(r"(Z|[+-]\d{2}:?\d{2})$", texto)):
+        texto += "Z"
+    return _momento(texto)
+
+
 def unir_desplazamientos(actividades: List[Activity], mapeo: Dict[str, str], filas: List[Dict[str, Any]]) -> List[str]:
     """Pone en cada OT dónde y cuándo el técnico dio «Desplazamiento OK», según la pregunta de
     desplazamientos (los IN_ROUTE de la app de técnicos). Se unen por «Id visita» o, si esa pregunta no
@@ -495,7 +505,7 @@ def unir_desplazamientos(actividades: List[Activity], mapeo: Dict[str, str], fil
         coords = _coordenadas_fila(fila, columnas)
         if not coords:
             continue
-        fecha, hora = _momento(fila.get(columnas["fecha"])) if "fecha" in columnas else (None, None)
+        fecha, hora = hora_desplazamiento(fila.get(columnas["fecha"])) if "fecha" in columnas else (None, None)
         cuando = f"{fecha} {hora}" if fecha and hora else fecha
         for campo in llaves:
             valor = _llave(fila.get(columnas[campo]))

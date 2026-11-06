@@ -102,7 +102,7 @@ El dato está en la base de la app de técnicos (en Metabase, la base **496**, t
 1. **Crear la pregunta de desplazamientos**: en el Mac, desde `backend`, `.venv/bin/python -m scripts.crear_pregunta_desplazamientos`. La crea con la API key de `backend/.env`, la prueba y dice su número. Si la API key no puede crear preguntas, `--sql` muestra el SQL para pegarlo en una pregunta nueva de SQL nativo sobre la base 496; luego `--revisar <número>` la prueba.
 2. **Agregar «Id visita» a la pregunta de Ruteo**: el id de la visita de la app de técnicos (el mismo `visit_id`), con ese nombre. `--revisar` dice cuántas OTs se unen.
 3. **Poner su número** en `METABASE_DESPLAZAMIENTOS_CARD_ID` en `backend/.env` (y en el servidor) y volver a correr `./iniciar.sh`.
-4. **Revisar la hora**: el comando muestra las horas de los últimos desplazamientos tal como llegan. Si terminan en `Z` o `+00:00`, Ruteo las pasa a la hora de Colombia; si salen 5 horas adelante sin eso, el comentario del SQL dice cómo corregirlo.
+4. **La hora**: la app de técnicos guarda las horas en UTC y Metabase las manda sin zona (`2026-11-05T19:27:12.035`); Ruteo las toma como UTC y las pasa a la hora de Colombia (14:27). El comando muestra cada hora como llega y como la mostrará Ruteo, para compararla con un desplazamiento conocido. Si algún día la pregunta ya las trae en hora de Colombia, pon `DESPLAZAMIENTOS_EN_UTC=false`.
 
 Si la pregunta de Ruteo está en la misma base, también sirve traer el dato en ella: columnas `Latitud desplazamiento`/`Longitud desplazamiento` (o `Ubicación desplazamiento` como «lat, lon») y `Fecha desplazamiento`. Si las preguntas no se pueden unir, el panel lo avisa y las OTs cargan igual.
 

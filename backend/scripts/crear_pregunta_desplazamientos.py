@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from api_gateway.metabase import ALIAS_COLUMNAS, ALIAS_DESPLAZAMIENTOS, _llave, resolver_mapeo
+from api_gateway.metabase import ALIAS_COLUMNAS, ALIAS_DESPLAZAMIENTOS, _llave, hora_desplazamiento, resolver_mapeo
 from scripts.explorar_metabase import _cliente
 from shared.config import settings
 
@@ -28,8 +28,8 @@ BASE_APP_TECNICOS = 496
 NOMBRE = "Ruteo · Desplazamientos OK (IN_ROUTE)"
 
 SQL = """-- Ruteo · Desplazamientos: el último «Desplazamiento OK» (IN_ROUTE) de cada visita, con su ubicación.
--- Ruteo la une a sus OTs por «Id visita». Si la hora sale 5 horas adelante (UTC), cambia la línea de
--- «Fecha desplazamiento» por: (COALESCE(t.created_at_app, t.created_at) - INTERVAL '5 hours') AS "Fecha desplazamiento",
+-- Ruteo la une a sus OTs por «Id visita». Las horas van en UTC, como las guarda la app de técnicos: Ruteo las
+-- pasa a la hora de Colombia.
 SELECT DISTINCT ON (t.visit_id)
   t.visit_id                                AS "Id visita",
   COALESCE(t.created_at_app, t.created_at)  AS "Fecha desplazamiento",
@@ -94,10 +94,11 @@ def revisar(cliente: httpx.Client, card_id: Any) -> None:
         return
     if "fecha" in columnas:
         horas = sorted((str(f.get(columnas["fecha"])) for f in filas if f.get(columnas["fecha"])), reverse=True)[:3]
-        print("  Horas de los últimos desplazamientos, tal como las manda Metabase (compáralas con uno que conozcas;")
-        print("  si terminan en Z o +00:00, Ruteo las pasa a la hora de Colombia):")
+        print("  Horas de los últimos desplazamientos: como las manda Metabase → como las muestra Ruteo (hora de")
+        print("  Colombia). Compáralas con un desplazamiento que conozcas:")
         for hora in horas:
-            print(f"    {hora}")
+            fecha, en_colombia = hora_desplazamiento(hora)
+            print(f"    {hora}  →  {fecha} {en_colombia or ''}")
 
     # ¿Se une con la pregunta de Ruteo?
     if not settings.METABASE_CARD_ID:
