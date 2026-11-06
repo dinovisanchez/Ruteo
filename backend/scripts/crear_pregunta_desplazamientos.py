@@ -9,7 +9,8 @@ Uso, desde la carpeta backend:
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos           # la crea y la prueba
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos --sql     # solo el SQL, para pegarlo a mano
     .venv/bin/python -m scripts.crear_pregunta_desplazamientos --revisar 12345   # prueba una ya creada
-    .venv/bin/python -m scripts.crear_pregunta_desplazamientos --tabla app.electrician_status_tracking  # con esquema
+    .venv/bin/python -m scripts.crear_pregunta_desplazamientos --actualizar 12345  # le pone el SQL de ahora
+    .venv/bin/python -m scripts.crear_pregunta_desplazamientos --tabla otro_esquema.electrician_status_tracking
 """
 import argparse
 import sys
@@ -30,12 +31,22 @@ NOMBRE = "Ruteo · Desplazamientos OK (IN_ROUTE)"
 SQL = """-- Ruteo · Desplazamientos: el último «Desplazamiento OK» (IN_ROUTE) de cada visita, con su ubicación.
 -- Ruteo la une a sus OTs por «Id visita». Las horas van en UTC, como las guarda la app de técnicos: Ruteo las
 -- pasa a la hora de Colombia.
+-- «Fecha llegada»: cuándo marcó que llegó a la dirección (IN_ADDRESS) después de ese desplazamiento.
 SELECT DISTINCT ON (t.visit_id)
   t.visit_id                                AS "Id visita",
   COALESCE(t.created_at_app, t.created_at)  AS "Fecha desplazamiento",
   t.latitude                                AS "Latitud desplazamiento",
-  t.longitude                               AS "Longitud desplazamiento"
+  t.longitude                               AS "Longitud desplazamiento",
+  llegada.hora                              AS "Fecha llegada"
 FROM __TABLA__ t
+LEFT JOIN LATERAL (
+  SELECT MIN(COALESCE(a.created_at_app, a.created_at)) AS hora
+  FROM __TABLA__ a
+  WHERE a.visit_id = t.visit_id
+    AND a.deleted_at IS NULL
+    AND a.electrician_status = 'IN_ADDRESS'
+    AND COALESCE(a.created_at_app, a.created_at) >= COALESCE(t.created_at_app, t.created_at)
+) llegada ON true
 WHERE t.deleted_at IS NULL
   AND t.electrician_status = 'IN_ROUTE'
   AND t.latitude IS NOT NULL AND t.latitude <> 0
@@ -44,7 +55,8 @@ ORDER BY t.visit_id, COALESCE(t.created_at_app, t.created_at) DESC
 """
 
 
-TABLA = "electrician_status_tracking"
+# En Bia está en la base 496 (prod-electrician-visits), esquema public
+TABLA = "public.electrician_status_tracking"
 
 
 def sql(dias: int, tabla: str = TABLA) -> str:
@@ -71,6 +83,16 @@ def crear(cliente: httpx.Client, base: int, dias: int, coleccion: Optional[int],
     return respuesta.json()["id"]
 
 
+def actualizar(cliente: httpx.Client, card_id: str, base: int, dias: int, tabla: str) -> None:
+    """Le pone el SQL de ahora a una pregunta ya creada, sin cambiarle el número"""
+    consulta = {"type": "native", "database": base, "native": {"query": sql(dias, tabla), "template-tags": {}}}
+    respuesta = cliente.put(f"/api/card/{card_id}", json={"dataset_query": consulta})
+    if respuesta.status_code in (401, 403):
+        sys.exit(f"La API key no puede editar la pregunta {card_id}. Edítala a mano: pega el SQL de --sql en ella.")
+    if respuesta.status_code not in (200, 202):
+        sys.exit(f"Metabase no actualizó la pregunta {card_id} (HTTP {respuesta.status_code}): {respuesta.text[:300]}")
+
+
 def filas_de(cliente: httpx.Client, card_id: Any) -> List[Dict[str, Any]]:
     respuesta = cliente.post(f"/api/card/{card_id}/query/json", data={"format_rows": "false"})
     if respuesta.status_code not in (200, 202):
@@ -92,6 +114,9 @@ def revisar(cliente: httpx.Client, card_id: Any) -> None:
     if faltan:
         print(f"  Le faltan columnas que Ruteo necesita: {', '.join(faltan)}. Usa el SQL de --sql.")
         return
+    if "llegada" in columnas:
+        con_llegada = sum(1 for f in filas if f.get(columnas["llegada"]))
+        print(f"  {con_llegada} {'tiene' if con_llegada == 1 else 'tienen'} la hora de llegada a la dirección (IN_ADDRESS).")
     if "fecha" in columnas:
         horas = sorted((str(f.get(columnas["fecha"])) for f in filas if f.get(columnas["fecha"])), reverse=True)[:3]
         print("  Horas de los últimos desplazamientos: como las manda Metabase → como las muestra Ruteo (hora de")
@@ -121,6 +146,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sql", action="store_true", help="Solo mostrar el SQL de la pregunta")
     parser.add_argument("--revisar", metavar="ID", help="Probar una pregunta de desplazamientos ya creada")
+    parser.add_argument("--actualizar", metavar="ID", help="Ponerle el SQL de ahora a una pregunta ya creada (mismo número)")
     parser.add_argument("--base", type=int, default=BASE_APP_TECNICOS, help=f"Base de la app de técnicos ({BASE_APP_TECNICOS})")
     parser.add_argument("--dias", type=int, default=7, help="Cuántos días atrás trae (7)")
     parser.add_argument("--coleccion", type=int, help="Id de la colección donde guardarla (por defecto, la raíz)")
@@ -134,6 +160,11 @@ def main() -> None:
     with _cliente() as cliente:
         if args.revisar:
             revisar(cliente, args.revisar)
+            return
+        if args.actualizar:
+            actualizar(cliente, args.actualizar, args.base, args.dias, args.tabla)
+            print(f"Actualicé la pregunta {args.actualizar}: ahora trae también la hora de llegada a la dirección.\n")
+            revisar(cliente, args.actualizar)
             return
         card_id = crear(cliente, args.base, args.dias, args.coleccion, args.tabla)
         print(f"Creé la pregunta «{NOMBRE}» con el número {card_id}.\n")

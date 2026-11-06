@@ -144,10 +144,14 @@ def test_ots_con_la_pregunta_de_desplazamientos(monkeypatch, cliente):
            fila("PEND1", "Pendiente por asignar", f"{dia(0)}T09:00:00", 4.680, -74.050, **{"Id visita": None})]
     # Como la consulta de la base de la app de técnicos: visit_id, latitude, longitude y la hora
     desplazamientos = [
-        {"visit_id": "501", "hora_marcado": f"{dia(0)}T13:30:00Z", "latitude": 4.6815, "longitude": -74.0512},
+        {"visit_id": "501", "hora_marcado": f"{dia(0)}T13:30:00Z", "latitude": 4.6815, "longitude": -74.0512,
+         "Fecha llegada": None},
         # El último desplazamiento de la visita es el que vale
-        {"visit_id": "501", "hora_marcado": f"{dia(0)}T14:52:00Z", "latitude": 4.6812, "longitude": -74.0511},
-        {"visit_id": "999", "hora_marcado": f"{dia(0)}T12:00:00Z", "latitude": 4.6, "longitude": -74.0},
+        {"visit_id": "501", "hora_marcado": f"{dia(0)}T14:52:00Z", "latitude": 4.6812, "longitude": -74.0511,
+         # La llegada a la dirección (IN_ADDRESS), sin zona como la manda la app de técnicos: es UTC
+         "Fecha llegada": f"{dia(0)}T15:10:00"},
+        {"visit_id": "999", "hora_marcado": f"{dia(0)}T12:00:00Z", "latitude": 4.6, "longitude": -74.0,
+         "Fecha llegada": None},
     ]
 
     async def pregunta(card_id):
@@ -159,6 +163,7 @@ def test_ots_con_la_pregunta_de_desplazamientos(monkeypatch, cliente):
     por_codigo = {a["codigo_bia"]: a for a in datos["actividades"]}
     assert por_codigo["ASIG1"]["desplazamiento_ok"] == {"latitude": 4.6812, "longitude": -74.0511}
     assert por_codigo["ASIG1"]["desplazamiento_ok_en"] == f"{dia(0)} 09:52"
+    assert por_codigo["ASIG1"]["llegada_sitio_en"] == f"{dia(0)} 10:10"
     assert por_codigo["ASIG2"]["desplazamiento_ok"] is None and por_codigo["PEND1"]["desplazamiento_ok"] is None
     assert not any("desplazamientos" in a for a in datos["avisos"])
 

@@ -12,7 +12,9 @@ import { paraOlibia } from '../services/plan';
 import { columnaCerca } from './AsignadasCerca';
 import { formatExtra } from './OtsTable';
 import { formatCop } from '../services/format';
-import { desplazamientoOk, textoDesplazamiento } from '../services/desplazamiento';
+import {
+  desplazamientoOk, promediosDesplazamiento, textoDesplazamiento, textoPromedios,
+} from '../services/desplazamiento';
 
 const km = (value) => (value ?? 0).toLocaleString('es-CO', { maximumFractionDigits: 1 });
 const hhmm = (value) => (value ? value.slice(0, 5) : '');
@@ -138,9 +140,11 @@ const exportCsv = (rows, dia) => {
   // ";" and decimal comma so it opens directly in Excel configured in Spanish
   const header = ['Día', 'OT', 'Situación', 'OR', 'Ciudad', 'Dirección', 'Tipo de OT', 'Personas', 'Enviar a', 'Responsable',
     'Fijada', 'Sale de', 'Km a la base', 'Secuencia', 'Llegada', 'Salida', 'Ubicación aproximada', 'Creada por',
-    'Fecha de creación', 'Desplazamiento OK', 'Km del desplazamiento a la dirección', 'Motivo', ...extraKeys];
+    'Fecha de creación', 'Desplazamiento OK', 'Km del desplazamiento al sitio', 'Llegada al sitio',
+    'Minutos hasta llegar', 'Motivo', ...extraKeys];
   const lines = rows.map(({ decision: d, actividad: a, parada }) => {
-    const kmDesplazamiento = desplazamientoOk(a)?.km;
+    const desplazamiento = desplazamientoOk(a);
+    const kmDesplazamiento = desplazamiento?.km;
     return [
       dia, d.codigo_bia, d.situacion === 'asignada' ? 'Asignada' : 'Por asignar', a?.or_operador, a?.ciudad, a?.direccion,
       a?.servicio, a?.personas_requeridas, DESTINO[d.enviar_a], d.responsable, d.fijada ? 'Sí' : 'No', d.sede,
@@ -148,6 +152,7 @@ const exportCsv = (rows, dia) => {
       parada?.secuencia, hhmm(parada?.hora_llegada_estimada), hhmm(parada?.hora_salida_estimada),
       a?.coordenadas_aproximadas ? 'Sí' : 'No', a?.creado_por, a?.fecha_creacion, a?.desplazamiento_ok_en,
       kmDesplazamiento === null || kmDesplazamiento === undefined ? '' : String(kmDesplazamiento).replace('.', ','),
+      a?.llegada_sitio_en, desplazamiento?.minutos ?? '',
       d.motivo,
       ...extraKeys.map((k) => formatExtra(a?.extras?.[k])),
     ];
@@ -507,6 +512,28 @@ const AssignmentResults = ({
           );
         })()}
         {!pendientesTodas && visibles && <span className="summary-count">Mostrando {rows.length} de {allRows.length}</span>}
+        {!pendientesTodas && (() => {
+          // From «Desplazamiento OK» to the site, on average, for what the list shows
+          const promedios = promediosDesplazamiento(rows.map((r) => ({ actividad: r.actividad, responsable: r.decision.responsable })));
+          if (!promedios.ots) return null;
+          const detalle = promedios.porTecnico.map((t) => [
+            `${t.nombre}: ${plural(t.ots, 'OT', 'OTs')}`,
+            t.km !== null ? `${km(t.km)} km` : null,
+            t.minutos !== null ? `${Math.round(t.minutos)} min` : null,
+          ].filter(Boolean).join(' · '));
+          return (
+            <Tooltip
+              title={(
+                <div>
+                  <div>Por técnico (km en línea recta desde donde dio «Desplazamiento OK»; minutos hasta marcar que llegó):</div>
+                  {detalle.map((linea) => <div key={linea}>{linea}</div>)}
+                </div>
+              )}
+            >
+              <span className="desplazamiento-promedio">{textoPromedios(promedios)}</span>
+            </Tooltip>
+          );
+        })()}
         {metricas.tiempos_por_vias ? <span>Tiempos por carretera{transito ? ` · tránsito ${transito}` : ''}</span> : null}
         {metricas.tecnicos_disponibles && metricas.radio_grupo_km !== undefined ? (
           <span>

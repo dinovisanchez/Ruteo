@@ -133,9 +133,10 @@ for n, fila in enumerate(FILAS):
 _VISITA = {f["Bia Code"]: f["Id visita"] for f in FILAS}
 DESPLAZAMIENTOS = [
     {"Id visita": _VISITA["CO1000000001"], "Fecha desplazamiento": f"{HOY}T18:52:00.035",
-     "Latitud desplazamiento": 4.6789, "Longitud desplazamiento": -74.0466},
+     "Latitud desplazamiento": 4.6789, "Longitud desplazamiento": -74.0466, "Fecha llegada": f"{HOY}T19:07:30"},
+    # Jhonatan no marcó la llegada: hay km pero no tiempo
     {"Id visita": _VISITA["CO0200000021"], "Fecha desplazamiento": f"{HOY}T17:40:00",
-     "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80},
+     "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80, "Fecha llegada": None},
 ]
 
 
@@ -165,6 +166,16 @@ def tablas(x_api_key: Optional[str] = Header(None)):
     return [{"id": 10, "db_id": 2, "schema": "operations", "name": "visitas_general", "display_name": "Visitas General"},
             {"id": 20, "db_id": 496, "schema": "app", "name": "electrician_status_tracking",
              "display_name": "Electrician Status Tracking"}]
+
+
+@app.put("/api/card/{card_id}")
+def actualizar_pregunta(card_id: int, cambios: dict = Body(...), x_api_key: Optional[str] = Header(None)):
+    """Editar la pregunta de desplazamientos (scripts/crear_pregunta_desplazamientos.py --actualizar)"""
+    if x_api_key != "test-key":
+        raise HTTPException(401, "Unauthenticated")
+    if card_id != 45 or "IN_ADDRESS" not in cambios["dataset_query"]["native"]["query"]:
+        raise HTTPException(400, "Solo se simula la pregunta de desplazamientos")
+    return {"id": card_id}
 
 
 @app.post("/api/card")

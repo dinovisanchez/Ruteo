@@ -559,6 +559,11 @@ body {
   color: #C93400;
 }
 
+.desplazamiento-promedio {
+  cursor: help;
+  border-bottom: 1px dotted var(--label-3);
+}
+
 .new-badge {
   margin-left: 6px;
   font-size: 11px;
