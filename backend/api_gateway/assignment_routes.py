@@ -427,6 +427,13 @@ async def metabase_ots(card_id: Optional[str] = None):
         actividades, mapeo, avisos = metabase.filas_a_actividades(filas)
     except metabase.MetabaseError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    # Dónde dio cada técnico «Desplazamiento OK»: otra pregunta, en la base de la app de técnicos
+    if settings.METABASE_DESPLAZAMIENTOS_CARD_ID:
+        try:
+            desplazamientos = await metabase.consultar_pregunta(settings.METABASE_DESPLAZAMIENTOS_CARD_ID)
+            avisos += metabase.unir_desplazamientos(actividades, mapeo, desplazamientos)
+        except metabase.MetabaseError as e:
+            avisos.append(f"No se pudo leer la pregunta de desplazamientos: {e}")
 
     geocodificadas, avisos_geo = await geocodificar(actividades)
     logger.info(f"Metabase pregunta {card}: {len(filas)} filas, {len(actividades)} OTs, {geocodificadas} geocodificadas")

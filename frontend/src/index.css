@@ -554,6 +554,16 @@ body {
   color: var(--label-3);
 }
 
+/* Dónde y cuándo el técnico dio «Desplazamiento OK»; en naranja si el trayecto no cuadra */
+.ot-desplazamiento.revisar {
+  color: #C93400;
+}
+
+.desplazamiento-promedio {
+  cursor: help;
+  border-bottom: 1px dotted var(--label-3);
+}
+
 .new-badge {
   margin-left: 6px;
   font-size: 11px;
@@ -982,6 +992,29 @@ body {
   border-radius: 6px;
 }
 
+/* En el mapa, donde el técnico dio «Desplazamiento OK» (rombo con el color de su ruta) */
+.desplazamiento-dot {
+  width: 10px;
+  height: 10px;
+  margin: 2px;
+  background: #FFFFFF;
+  border: 3px solid #8E8E93;
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.desplazamiento-dot.revisar {
+  background: #FF9500;
+}
+
+.desplazamiento-dot.leyenda {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 3px;
+  border-width: 2px;
+}
+
 .map-popup {
   font-size: 12px;
   line-height: 1.5;
@@ -1123,7 +1156,7 @@ body {
   font-weight: 600;
 }
 
-/* Inicio de sesión con Google (solo en un servidor compartido) */
+/* Inicio de sesión con Google o con la clave de acceso (solo en un servidor compartido) */
 .login {
   min-height: 100vh;
   display: flex;
@@ -1158,6 +1191,12 @@ body {
 
 .login-button {
   min-height: 44px;
+}
+
+/* Con la clave de acceso en vez de Google */
+.login-clave {
+  width: 100%;
+  min-width: 260px;
 }
 
 .app-subtitle.sesion {

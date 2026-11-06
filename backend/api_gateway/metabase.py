@@ -56,8 +56,37 @@ ALIAS_COLUMNAS: Dict[str, List[str]] = {
                        "fecha de registro"],
     # La duración de una instalación depende del tipo de medida
     "tipo_medida": ["tipo de medida", "tipo medida", "medida", "measurement type", "measurement type id"],
+    # Para unir la pregunta de desplazamientos: el id de la visita en la app de técnicos
+    "id_visita": ["id visita", "id de la visita", "visit id", "visita id"],
+    # Dónde y cuándo el técnico dio «Desplazamiento OK» en Olibia
+    "desplazamiento_gps": ["gps desplazamiento", "gps desplazamiento ok", "ubicacion desplazamiento",
+                           "ubicacion desplazamiento ok", "coordenadas desplazamiento", "coordenadas desplazamiento ok",
+                           "desplazamiento ok gps", "desplazamiento ok ubicacion", "desplazamiento ok coordenadas"],
+    "desplazamiento_latitud": ["latitud desplazamiento", "latitud desplazamiento ok", "lat desplazamiento",
+                               "desplazamiento ok latitud", "desplazamiento ok lat"],
+    "desplazamiento_longitud": ["longitud desplazamiento", "longitud desplazamiento ok", "lon desplazamiento",
+                                "lng desplazamiento", "desplazamiento ok longitud", "desplazamiento ok lon"],
+    "desplazamiento_fecha": ["fecha desplazamiento", "fecha desplazamiento ok", "hora desplazamiento",
+                             "hora desplazamiento ok", "desplazamiento ok fecha", "desplazamiento ok hora",
+                             "desplazamiento ok"],
 }
 SERVICIO_POR_DEFECTO = "default"
+
+# Columnas de la pregunta de desplazamientos (los IN_ROUTE de electrician_status_tracking)
+ALIAS_DESPLAZAMIENTOS: Dict[str, List[str]] = {
+    "id_visita": ["id visita", "id de la visita", "visit id", "visita id"],
+    "orden_trabajo": ["orden de trabajo", "orden trabajo", "card id"],
+    "codigo_bia": ["bia code", "codigo bia", "internal bia code", "co"],
+    "gps": ["gps desplazamiento", "ubicacion desplazamiento", "ubicacion desplazamiento ok", "ubicacion", "coordenadas"],
+    "latitud": ["latitud desplazamiento", "latitude", "lat"],
+    "longitud": ["longitud desplazamiento", "longitude", "lon", "lng"],
+    "fecha": ["fecha desplazamiento", "hora desplazamiento", "hora marcado", "hora", "created at app", "created at"],
+    # Cuándo y dónde marcó que llegó a la dirección (IN_ADDRESS)
+    "llegada": ["fecha llegada", "hora llegada", "llegada", "llegada al sitio", "fecha llegada sitio"],
+    "llegada_gps": ["gps llegada", "ubicacion llegada", "coordenadas llegada"],
+    "llegada_latitud": ["latitud llegada", "lat llegada"],
+    "llegada_longitud": ["longitud llegada", "lon llegada", "lng llegada"],
+}
 
 # Tipo de medida (como viene de Olibia o en español) → como se nombra en el tipo de OT
 _MEDIDAS = {
@@ -150,10 +179,12 @@ async def consultar_pregunta(card_id: str) -> List[Dict[str, Any]]:
     return filas
 
 
-def resolver_mapeo(columnas: List[str], mapeo_manual: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def resolver_mapeo(columnas: List[str], mapeo_manual: Optional[Dict[str, str]] = None,
+                   alias_columnas: Optional[Dict[str, List[str]]] = None) -> Dict[str, str]:
     """Campo de la OT → nombre de columna en Metabase.
 
-    El mapeo manual (METABASE_COLUMN_MAP) manda; el resto se detecta por alias.
+    El mapeo manual (METABASE_COLUMN_MAP) manda; el resto se detecta por alias (los de la pregunta de
+    OTs, u otros como los de la pregunta de desplazamientos).
     """
     mapeo: Dict[str, str] = {}
     por_clave = {_clave_columna(c): c for c in columnas}
@@ -163,7 +194,7 @@ def resolver_mapeo(columnas: List[str], mapeo_manual: Optional[Dict[str, str]] =
         elif _clave_columna(columna) in por_clave:
             mapeo[campo] = por_clave[_clave_columna(columna)]
     usadas = set(mapeo.values())
-    for campo, alias in ALIAS_COLUMNAS.items():
+    for campo, alias in (alias_columnas or ALIAS_COLUMNAS).items():
         if campo in mapeo:
             continue
         for nombre in [campo.replace("_", " ")] + alias:
@@ -207,16 +238,26 @@ def _numero(valor: Any) -> Optional[float]:
         return None
 
 
-def _coordenadas_fila(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Optional[GPSCoordinates]:
-    if "gps" in mapeo:
-        coords = parse_coordenadas(_texto(fila.get(mapeo["gps"])))
+def _coordenadas_fila(fila: Dict[str, Any], mapeo: Dict[str, str], prefijo: str = "") -> Optional[GPSCoordinates]:
+    """Las coordenadas de la fila: la OT, o con prefijo «desplazamiento_» las del desplazamiento OK"""
+    gps, latitud, longitud = f"{prefijo}gps", f"{prefijo}latitud", f"{prefijo}longitud"
+    if gps in mapeo:
+        coords = parse_coordenadas(_texto(fila.get(mapeo[gps])))
         if coords:
             return coords
-    if "latitud" in mapeo and "longitud" in mapeo:
-        lat, lon = _numero(fila.get(mapeo["latitud"])), _numero(fila.get(mapeo["longitud"]))
+    if latitud in mapeo and longitud in mapeo:
+        lat, lon = _numero(fila.get(mapeo[latitud])), _numero(fila.get(mapeo[longitud]))
         if lat is not None and lon is not None and validate_gps_colombia(lat, lon)[0]:
             return GPSCoordinates(latitude=lat, longitude=lon)
     return None
+
+
+def _desplazamiento_en(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Optional[str]:
+    """Cuándo dio el técnico «Desplazamiento OK»: «YYYY-MM-DD HH:MM» o solo la fecha"""
+    if "desplazamiento_fecha" not in mapeo:
+        return None
+    fecha, hora = _momento(fila.get(mapeo["desplazamiento_fecha"]))
+    return f"{fecha} {hora}" if fecha and hora else fecha
 
 
 # Valores de «Situación» (los de la pregunta recomendada y sus variantes) y de «Estado app» de Olibia.
@@ -238,8 +279,11 @@ ESTADOS_APP = {
 }
 
 
-# Vencidas en Olibia («Vencida», «Cierre vencido», EXPIRED): no entran, como las canceladas
-VENCIDAS_APP = {"expired", "overdue"}
+# Vencidas en Olibia («Vencida», «Cierre vencido», «Vencimiento», «Expirada», EXPIRED, OVERDUE…): no
+# entran, como las canceladas. Se buscan en Situación, Estado, Estado app y cualquier columna cuyo
+# nombre diga estado, status o situación.
+PALABRAS_VENCIDA = ("vencid", "vencim", "expir", "caducad", "overdue")
+NOMBRES_COLUMNA_ESTADO = ("estado", "status", "situacion")
 NO_ENTRAN = ("descartada", "vencida")
 
 
@@ -247,26 +291,30 @@ def _clave_estado(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", normalizar_texto(texto)).strip()
 
 
-def _es_vencida(fila: Dict[str, Any], mapeo: Dict[str, str]) -> bool:
-    """Si Situación, Estado o Estado app dicen que la OT está vencida en Olibia"""
-    for campo in ("situacion", "estado", "estado_app"):
-        if campo in mapeo:
-            clave = _clave_estado(_texto(fila.get(mapeo[campo])))
-            if "vencid" in clave or clave in VENCIDAS_APP:
-                return True
-    return False
+def _columnas_estado(mapeo: Dict[str, str], columnas: List[str]) -> List[str]:
+    """Las columnas que dicen el estado de la OT: las reconocidas y cualquier otra que lo diga en el nombre"""
+    propias = [mapeo[c] for c in ("situacion", "estado", "estado_app") if c in mapeo]
+    otras = [c for c in columnas if c not in propias and any(n in _clave_columna(c) for n in NOMBRES_COLUMNA_ESTADO)]
+    return propias + otras
+
+
+def _valor_vencido(fila: Dict[str, Any], columnas_estado: List[str]) -> Optional[str]:
+    """El valor que dice que la OT está vencida en Olibia, o None"""
+    for columna in columnas_estado:
+        texto = _texto(fila.get(columna))
+        if texto and any(p in _clave_estado(texto) for p in PALABRAS_VENCIDA):
+            return texto
+    return None
 
 
 def _estado(fila: Dict[str, Any], mapeo: Dict[str, str]) -> Tuple[str, Optional[str]]:
     """(estado, valor que no se reconoció) según «Situación» o, si no la trae, «Estado app».
 
-    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada), "descartada"
-    (cancelada o rechazada: no entra) o "vencida" (vencida en Olibia en cualquiera de las columnas de
-    estado: no entra aunque la Situación diga por asignar). Un archivo sin columnas de estado trae OTs
-    por asignar; un valor que no se reconoce se toma como por asignar, para que se vea, y se avisa.
+    El estado es "pendiente", "asignada", "cerrada" (ya se hizo: cuenta como asignada) o "descartada"
+    (cancelada o rechazada: no entra); las vencidas se apartan antes (ver _valor_vencido). Un archivo
+    sin columnas de estado trae OTs por asignar; un valor que no se reconoce se toma como por asignar,
+    para que se vea, y se avisa.
     """
-    if _es_vencida(fila, mapeo):
-        return "vencida", None
     desconocido = None
     for campo, valores in (("situacion", SITUACIONES), ("estado_app", ESTADOS_APP)):
         if campo not in mapeo:
@@ -348,9 +396,19 @@ def filas_a_actividades(
         avisos.append(
             "La pregunta no tiene columna de código (Bia Code u OT); cada fila se numeró como OT-1, OT-2, ..."
         )
-    estados = {numero: _estado(fila, mapeo) for numero, fila in enumerate(filas, start=1)}
+    # Vencida en cualquiera de las columnas de estado: no entra, aunque la Situación diga por asignar
+    columnas_estado = _columnas_estado(mapeo, columnas)
+    estados: Dict[int, Tuple[str, Optional[str]]] = {}
+    valores_vencida: Counter = Counter()
+    for numero, fila in enumerate(filas, start=1):
+        valor = _valor_vencido(fila, columnas_estado)
+        if valor:
+            estados[numero] = ("vencida", None)
+            valores_vencida[valor] += 1
+        else:
+            estados[numero] = _estado(fila, mapeo)
     descartadas = sum(1 for estado, _ in estados.values() if estado == "descartada")
-    vencidas = sum(1 for estado, _ in estados.values() if estado == "vencida")
+    vencidas = sum(valores_vencida.values())
     # Por asignar con la fecha de visita ya pasada: también vencidas, no aplican
     hoy_iso = hoy().isoformat()
     pasadas = 0
@@ -364,7 +422,8 @@ def filas_a_actividades(
     if descartadas:
         avisos.append(f"OTs canceladas o rechazadas que no se cargan: {descartadas}")
     if vencidas:
-        avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas}")
+        valores = ", ".join(f"«{v}» ({n})" for v, n in valores_vencida.most_common(4))
+        avisos.append(f"OTs vencidas en Olibia que no se cargan: {vencidas} ({valores})")
     if pasadas:
         avisos.append(f"OTs por asignar con la fecha de visita ya pasada (vencidas), que no se cargan: {pasadas}")
     if desconocidos:
@@ -406,12 +465,77 @@ def filas_a_actividades(
             ),
             creado_por=(_texto(fila.get(mapeo["creado_por"])) or None) if "creado_por" in mapeo else None,
             fecha_creacion=_fecha(fila.get(mapeo["fecha_creacion"])) if "fecha_creacion" in mapeo else None,
+            desplazamiento_ok=_coordenadas_fila(fila, mapeo, "desplazamiento_"),
+            desplazamiento_ok_en=_desplazamiento_en(fila, mapeo),
         ))
     if fechas_raras:
         avisos.append(f"Fechas de visita que no se entendieron (quedaron sin fecha): {fechas_raras}")
     if len(actividades) != len(filas):
         avisos.insert(0, f"Metabase trajo {len(filas)} filas y quedaron {len(actividades)} OTs")
     return actividades, mapeo, avisos
+
+
+def _llave(valor: Any) -> str:
+    """Un id para unir dos preguntas: 123, 123.0 y «123» son el mismo"""
+    texto = _texto(valor)
+    return texto[:-2] if texto.endswith(".0") and texto[:-2].isdigit() else texto
+
+
+def hora_desplazamiento(valor: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(fecha, hora) en Colombia de un desplazamiento. La app de técnicos guarda la hora en UTC y Metabase
+    la manda sin zona («2026-11-05T19:27:12.035»): sin zona se toma como UTC (DESPLAZAMIENTOS_EN_UTC)"""
+    texto = _texto(valor)
+    if (settings.DESPLAZAMIENTOS_EN_UTC and re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", texto)
+            and not re.search(r"(Z|[+-]\d{2}:?\d{2})$", texto)):
+        texto += "Z"
+    return _momento(texto)
+
+
+def unir_desplazamientos(actividades: List[Activity], mapeo: Dict[str, str], filas: List[Dict[str, Any]]) -> List[str]:
+    """Pone en cada OT dónde y cuándo el técnico dio «Desplazamiento OK», según la pregunta de
+    desplazamientos (los IN_ROUTE de la app de técnicos). Se unen por «Id visita» o, si esa pregunta no
+    lo trae, por la orden de trabajo o el código; vale el último de cada visita. Devuelve avisos.
+    """
+    if not filas:
+        return []
+    columnas = resolver_mapeo(list(filas[0].keys()), {}, ALIAS_DESPLAZAMIENTOS)
+    llaves = [campo for campo in ("id_visita", "orden_trabajo", "codigo_bia") if campo in columnas and campo in mapeo]
+    if not llaves:
+        return ["La pregunta de desplazamientos no se puede unir con las OTs: agrega «Id visita» a las dos preguntas"]
+    if "gps" not in columnas and not ("latitud" in columnas and "longitud" in columnas):
+        return ["La pregunta de desplazamientos no trae la ubicación: le faltan las columnas de latitud y longitud"]
+
+    def momento(fila: Dict[str, Any], campo: str) -> Optional[str]:
+        fecha, hora = hora_desplazamiento(fila.get(columnas[campo])) if campo in columnas else (None, None)
+        return f"{fecha} {hora}" if fecha and hora else fecha
+
+    ultimos: Dict[Tuple[str, str], Tuple[str, GPSCoordinates, Optional[str], Optional[str], Optional[GPSCoordinates]]] = {}
+    for fila in filas:
+        coords = _coordenadas_fila(fila, columnas)
+        if not coords:
+            continue
+        cuando, llegada = momento(fila, "fecha"), momento(fila, "llegada")
+        sitio = _coordenadas_fila(fila, columnas, "llegada_")
+        for campo in llaves:
+            valor = _llave(fila.get(columnas[campo]))
+            if valor and ((campo, valor) not in ultimos or (cuando or "") > ultimos[(campo, valor)][0]):
+                ultimos[(campo, valor)] = (cuando or "", coords, cuando, llegada, sitio)
+
+    unidas = 0
+    for actividad in actividades:
+        if actividad.desplazamiento_ok:
+            continue  # La pregunta de OTs ya lo trae
+        for campo in llaves:
+            encontrado = ultimos.get((campo, _llave(actividad.extras.get(mapeo[campo]))))
+            if encontrado:
+                actividad.desplazamiento_ok, actividad.desplazamiento_ok_en = encontrado[1], encontrado[2]
+                actividad.llegada_sitio_en, actividad.llegada_sitio = encontrado[3], encontrado[4]
+                unidas += 1
+                break
+    if ultimos and not unidas:
+        return [f"La pregunta de desplazamientos trajo {len(filas)} filas, pero ninguna es de las OTs cargadas: revisa "
+                "que las dos tengan el mismo «Id visita»"]
+    return []
 
 
 def _ejemplos(codigos: List[str]) -> str:

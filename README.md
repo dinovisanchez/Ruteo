@@ -93,6 +93,19 @@ Sirven como indicadores del proyecto: porcentaje de OTs que se asignan como reco
 
 **Para Olibia.** Ruteo todavía no escribe en Olibia. En la lista del día, **Para Olibia (N)** junta lo que falta llevar allá: las sugeridas, las elegidas a mano y las reasignadas, con fecha, hora estimada, ciudad, dirección y a quién asignarlas. Respeta los filtros (por ejemplo, un OR). **Copiar** las deja listas para pegar en una hoja de cálculo y **Descargar CSV** las guarda. Cuando se asignan en Olibia, en la siguiente actualización aparecen como asignadas.
 
+### Desplazamiento OK de cada CO
+
+Cada CO asignada muestra dónde y a qué hora el técnico dio **«Desplazamiento OK»** en la app de técnicos, a cuántos km quedaba del sitio y cuándo marcó que llegó a la dirección (`IN_ADDRESS`), con los minutos que tardó: «Desplazamiento OK 08:52 · a 3,2 km del sitio · llegó 09:07 (15 min) · ver»; *ver* abre el punto en Google Maps. **El sitio es donde marcó la llegada** (el GPS de `IN_ADDRESS`), y los km van en línea recta desde donde dio el desplazamiento. Sin llegada marcada se mide hasta la dirección de la OT, pero solo si está ubicada exacta: si está ubicada por su calle o su municipio dice «sin km: la dirección está ubicada aprox.», porque daría km inventados. En naranja y **fuera de los promedios** quedan los que no cuadran: «abierto ya en el sitio» (a menos de 300 m de donde marcó la llegada) y «no cuadra» (más de 90 km/h entre las dos marcas). Arriba de la lista sale el **promedio** de lo que se ve («Desplazamiento OK en 12 OTs · en promedio a 3,4 km del sitio · 18 min hasta llegar · no cuentan: 2 abiertos ya en el sitio»), y al pasar el mouse, el de cada técnico; respeta los filtros. Una llegada antes del desplazamiento o más de 8 horas después no cuenta (marcas olvidadas). En el *Mapa* el desplazamiento es un rombo con el color de la ruta, unido a su parada; y el CSV de la lista lleva la hora, los km, la llegada y los minutos.
+
+El dato está en la base de la app de técnicos (en Metabase, la base **496**, tabla `electrician_status_tracking`, estado `IN_ROUTE`), que no es la de la pregunta de Ruteo, así que va en **otra pregunta** y Ruteo las une por el id de la visita:
+
+1. **Crear la pregunta de desplazamientos**: en el Mac, desde `backend`, `.venv/bin/python -m scripts.crear_pregunta_desplazamientos`. La crea con la API key de `backend/.env` sobre `public.electrician_status_tracking` de la base 496 (prod-electrician-visits), la prueba y dice su número. Si la API key no puede crear preguntas, `--sql` muestra el SQL para pegarlo en una pregunta nueva de SQL nativo sobre esa base; luego `--revisar <número>` la prueba. Para ponerle el SQL más reciente a una pregunta ya creada sin cambiarle el número: `--actualizar <número>`. Para buscar en qué base y esquema está una tabla: `.venv/bin/python -m scripts.explorar_metabase --nombre status_tracking`.
+2. **Agregar «Id visita» a la pregunta de Ruteo**: el id de la visita de la app de técnicos (el mismo `visit_id`), con ese nombre. `--revisar` dice cuántas OTs se unen.
+3. **Poner su número** en `METABASE_DESPLAZAMIENTOS_CARD_ID` en `backend/.env` (y en el servidor) y volver a correr `./iniciar.sh`.
+4. **La hora**: la app de técnicos guarda las horas en UTC y Metabase las manda sin zona (`2026-11-05T19:27:12.035`); Ruteo las toma como UTC y las pasa a la hora de Colombia (14:27). El comando muestra cada hora como llega y como la mostrará Ruteo, para compararla con un desplazamiento conocido. Si algún día la pregunta ya las trae en hora de Colombia, pon `DESPLAZAMIENTOS_EN_UTC=false`.
+
+Si la pregunta de Ruteo está en la misma base, también sirve traer el dato en ella: columnas `Latitud desplazamiento`/`Longitud desplazamiento` (o `Ubicación desplazamiento` como «lat, lon») y `Fecha desplazamiento`. Si las preguntas no se pueden unir, el panel lo avisa y las OTs cargan igual.
+
 ### Tiempos de desplazamiento y de cada visita
 
 - **Por las vías.** El tiempo entre dos puntos es el de la ruta por carretera según OSRM (una consulta de tabla por plan, guardada en memoria). Si OSRM no responde, se estima con la línea recta × *factor vial*: los primeros 15 km a la velocidad en ciudad y el resto a 60 km/h.
@@ -146,7 +159,10 @@ SELECT
   city_name AS "Ciudad",
   department AS "Departamento",
   wo_generate_by AS "Creado por",
-  created_at AS "Fecha de creación"
+  created_at AS "Fecha de creación",
+  -- El id de la visita en la app de técnicos (el mismo visit_id de electrician_status_tracking): une la pregunta
+  -- de desplazamientos (ver «Desplazamiento OK de cada CO» en el README). Si no coincide, prueba con visit_id
+  id AS "Id visita"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
   -- Ni canceladas ni de cierre vencido (Olibia las cuenta aparte)
@@ -168,7 +184,7 @@ ORDER BY fecha_visita NULLS LAST, card_id;
 
 La misma consulta está en [docs/pregunta_metabase.sql](docs/pregunta_metabase.sql), para copiarla entera: en el Mac, `pbcopy < docs/pregunta_metabase.sql` la deja en el portapapeles.
 
-**Estados y fechas.** La *Situación* se lee por su valor completo: «Pendiente por asignar», «Asignada», «Reasignada», «Cerrada», «Cierre exitoso»… Si la pregunta no trae *Situación*, vale *Estado app* de Olibia (`PENDING_ASSIGNMENT`, `ASSIGNED`, `REASSIGNED`, `COMPLETED`…). Las canceladas, anuladas o rechazadas no se cargan. Tampoco las **vencidas en Olibia**: si *Situación*, *Estado* o *Estado app* dicen «Vencida», «Cierre vencido» o `EXPIRED`, la OT no entra aunque diga por asignar (el panel dice cuántas quedaron fuera). Una OT por asignar cuya fecha de visita ya pasó también es vencida y no se carga. Un valor que Ruteo no conoce (por ejemplo «No asignada») se toma como por asignar, para que se vea, y el panel lo avisa con el valor y cuántas filas lo traen. Las fechas con hora que Metabase manda con zona (`…-05:00`) o en UTC (`…Z`) se pasan a la hora de Colombia, así una visita de las 10 p. m. no cae al día siguiente; medianoche cuenta como fecha sin hora. En un Excel o CSV las fechas en texto van con el día primero (`03/11/2026` es el 3 de noviembre). «Hoy» es hoy en Colombia (`ZONA_HORARIA`), aunque el servidor esté en otra zona.
+**Estados y fechas.** La *Situación* se lee por su valor completo: «Pendiente por asignar», «Asignada», «Reasignada», «Cerrada», «Cierre exitoso»… Si la pregunta no trae *Situación*, vale *Estado app* de Olibia (`PENDING_ASSIGNMENT`, `ASSIGNED`, `REASSIGNED`, `COMPLETED`…). Las canceladas, anuladas o rechazadas no se cargan. Tampoco las **vencidas en Olibia**: si *Situación*, *Estado*, *Estado app* o cualquier columna cuyo nombre diga estado, status o situación dice «Vencida», «Cierre vencido», «Vencimiento…», «Expirada», «Caducada», `EXPIRED` u `OVERDUE…`, la OT no entra aunque diga por asignar (el panel dice cuántas quedaron fuera y con qué valores). Una OT por asignar cuya fecha de visita ya pasó también es vencida y no se carga. Un valor que Ruteo no conoce (por ejemplo «No asignada») se toma como por asignar, para que se vea, y el panel lo avisa con el valor y cuántas filas lo traen. Las fechas con hora que Metabase manda con zona (`…-05:00`) o en UTC (`…Z`) se pasan a la hora de Colombia, así una visita de las 10 p. m. no cae al día siguiente; medianoche cuenta como fecha sin hora. En un Excel o CSV las fechas en texto van con el día primero (`03/11/2026` es el 3 de noviembre). «Hoy» es hoy en Colombia (`ZONA_HORARIA`), aunque el servidor esté en otra zona.
 
 **Ubicaciones.** Con coordenadas en la pregunta, la ruta, los km y la columna *Asignadas cerca* son exactos; con solo la dirección dependen de encontrarla en el mapa. Por eso:
 
@@ -234,26 +250,29 @@ Para que todos los coordinadores usen el mismo Ruteo (la misma configuración de
 ```bash
 docker build -t ruteo .
 docker run -d -p 8000:8000 --env-file backend/.env -v ruteo-datos:/datos \
-  -e GOOGLE_CLIENT_ID=<client id> -e ALLOWED_HOSTS='["ruteo.bia.app"]' ruteo
+  -e CLAVE_ACCESO='<una frase larga>' -e ALLOWED_HOSTS='["ruteo.bia.app"]' ruteo
 ```
 
 - **Datos**: la configuración, las sugerencias y el caché de direcciones quedan en `/datos`; móntalo como volumen para no perderlos al actualizar.
-- **Login con Google**: en Google Cloud → *APIs y servicios* → *Credenciales* → *Crear ID de cliente de OAuth* (tipo *Aplicación web*), con la dirección del servidor en *Orígenes de JavaScript autorizados* (por ejemplo `https://ruteo.bia.app`). El *ID de cliente* va en `GOOGLE_CLIENT_ID` (no es secreto). Con él, Ruteo pide iniciar sesión con Google y solo deja entrar cuentas de `DOMINIOS_PERMITIDOS` (`["bia.app"]` por defecto) o de `CORREOS_PERMITIDOS`. **Sin él el servidor no arranca**, porque cualquiera que llegue a la dirección vería las OTs de Metabase; para probar en un equipo propio se puede arrancar sin login con `-e SIN_LOGIN=1`.
+- **Login**: el servidor **no arranca sin uno**, porque cualquiera que llegue a la dirección vería las OTs de Metabase. Hay dos:
+  - **Clave de acceso** (sin Google Cloud): `CLAVE_ACCESO` con 12 caracteres o más (mejor una frase de varias palabras). La app la pide al entrar y da una sesión de 12 horas; tras 10 intentos equivocados desde una dirección hay que esperar 15 minutos. Compártela con el equipo por un canal privado (nunca en el repositorio ni en un chat); al cambiarla, todas las sesiones se cierran.
+  - **Google**: en Google Cloud → *APIs y servicios* → *Credenciales* → *Crear ID de cliente de OAuth* (tipo *Aplicación web*), con la dirección del servidor en *Orígenes de JavaScript autorizados* (por ejemplo `https://ruteo.bia.app`). El *ID de cliente* va en `GOOGLE_CLIENT_ID` (no es secreto). Con él, Ruteo pide iniciar sesión con Google y solo deja entrar cuentas de `DOMINIOS_PERMITIDOS` (`["bia.app"]` por defecto) o de `CORREOS_PERMITIDOS`. Si están las dos, manda Google.
+  - Para probar en un equipo propio se puede arrancar sin login con `-e SIN_LOGIN=1`.
 - **Dirección**: `ALLOWED_HOSTS` es la lista de nombres con que se entra (la imagen acepta cualquiera si no se pone). Va detrás de HTTPS (un balanceador o un proxy): Google exige HTTPS para el login, salvo en `localhost`.
 - **Metabase, Google Geocoding, OSRM**: las mismas variables de `backend/.env`.
 - **Varias personas a la vez**: si dos guardan cambios de configuración al tiempo, el segundo recibe un aviso para recargar en vez de borrar lo del primero.
 - Sin Docker: compila la app con `REACT_APP_API_URL=/api npm run build` en `frontend/` y corre `./servidor.sh` (en Linux).
 
-En GitHub, cada push construye la imagen y revisa que sin login no arranque, que sirva la app y que con `GOOGLE_CLIENT_ID` pida iniciar sesión y deje entrar a la app en Vercel.
+En GitHub, cada push construye la imagen y revisa que sin login (o con una clave corta) no arranque, que sirva la app, que con `CLAVE_ACCESO` solo se entre con la clave y que con `GOOGLE_CLIENT_ID` pida iniciar sesión y deje entrar a la app en Vercel.
 
 ### Con la pantalla en Vercel
 
 Vercel sirve bien la pantalla (`frontend/`), pero **el backend no puede ir en Vercel**: tiene que estar siempre encendido (el optimizador, la búsqueda de direcciones en segundo plano) y guardar la configuración de técnicos y contratistas en `/datos`. Si en Vercel sale «No hay conexión con el backend», es porque la pantalla sigue buscando el backend en `http://localhost:8000`, que solo existe en el Mac de cada uno.
 
 1. **El backend en un servicio que corra la imagen de Docker con un disco**. Por ejemplo, en Render: *New → Web Service* → este repositorio (encuentra el `Dockerfile` solo), *Health check path* `/api/health` y un *Disk* montado en `/datos`. Cualquier otro que corra Docker con un volumen sirve igual (Railway, Fly.io, una máquina de Bia).
-2. **Sus variables** (en el panel del servicio, nunca en el repositorio ni en un chat): `METABASE_URL`, `METABASE_API_KEY`, `METABASE_CARD_ID` y las demás de `backend/.env` que uses; `GOOGLE_CLIENT_ID`; y `FRONTEND_URL` con la dirección de Vercel (`https://<tu-proyecto>.vercel.app`, o varias separadas por comas) para que la pantalla pueda llamarlo.
+2. **Sus variables** (en el panel del servicio, nunca en el repositorio ni en un chat): `METABASE_URL`, `METABASE_API_KEY`, `METABASE_CARD_ID` y las demás de `backend/.env` que uses; `CLAVE_ACCESO` (o `GOOGLE_CLIENT_ID`); y `FRONTEND_URL` con la dirección de Vercel (`https://<tu-proyecto>.vercel.app`, o varias separadas por comas) para que la pantalla pueda llamarlo.
 3. **En Vercel**: *Settings → Environment Variables* → `REACT_APP_API_URL` = la dirección del backend terminada en `/api` (por ejemplo `https://ruteo-api.onrender.com/api`). El valor se mete en la app al compilarla, así que después hay que hacer *Redeploy*.
-4. **En el ID de cliente de OAuth de Google**, agrega la dirección de Vercel en *Orígenes de JavaScript autorizados*.
+4. **Solo si usas el login con Google**: en el ID de cliente de OAuth, agrega la dirección de Vercel en *Orígenes de JavaScript autorizados*.
 
 Sin Vercel también sirve: la imagen ya trae la pantalla, así que basta con abrir la dirección del backend.
 

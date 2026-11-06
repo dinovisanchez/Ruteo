@@ -4,6 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getRouteGeometry } from '../services/api';
 import { errorOsrm, rutaPorVias } from '../services/osrm';
+import { desplazamientoOk, textoDesplazamiento } from '../services/desplazamiento';
 
 export const ROUTE_COLORS = [
   '#007AFF', '#FF9500', '#34C759', '#AF52DE', '#FF2D55',
@@ -71,6 +72,7 @@ const AssignmentMapView = ({ result, incluirRetorno, visibles, situaciones }) =>
     const bounds = L.latLngBounds([]);
     const drawnBases = new Set();
     const pendingLines = [];
+    let conDesplazamiento = false;
 
     result.rutas.forEach((asignada, idx) => {
       const color = ROUTE_COLORS[idx % ROUTE_COLORS.length];
@@ -120,6 +122,33 @@ const AssignmentMapView = ({ result, incluirRetorno, visibles, situaciones }) =>
               <div class="map-popup-sub">Llega ${stop.hora_llegada_estimada.slice(0, 5)} · sale ${stop.hora_salida_estimada.slice(0, 5)}</div>
             </div>`)
           .addTo(layerRef.current);
+
+        // Where the technician gave «Desplazamiento OK», joined to its stop
+        const punto = stop.actividad.desplazamiento_ok;
+        if (punto) {
+          const lugar = [punto.latitude, punto.longitude];
+          const detalle = desplazamientoOk(stop.actividad);
+          conDesplazamiento = true;
+          L.polyline([latLng, lugar], {
+            color, weight: 1.5, opacity: visible ? 0.8 : 0.15, dashArray: '2 5',
+          }).addTo(layerRef.current);
+          L.marker(lugar, {
+            opacity: visible ? 1 : 0.2,
+            icon: L.divIcon({
+              className: 'stop-marker',
+              html: `<div class="desplazamiento-dot${detalle.revisar ? ' revisar' : ''}" style="border-color:${color}"></div>`,
+              iconSize: [14, 14],
+              iconAnchor: [7, 7],
+            }),
+          })
+            .bindPopup(`
+              <div class="map-popup">
+                <div class="map-popup-title">OT ${escapeHtml(stop.actividad.codigo_bia)}</div>
+                <div>${escapeHtml(textoDesplazamiento(detalle))}</div>
+                <div class="map-popup-sub">${escapeHtml(asignada.responsable)}</div>
+              </div>`)
+            .addTo(layerRef.current);
+        }
       });
 
       const points = routePoints(asignada, incluirRetorno);
@@ -163,7 +192,10 @@ const AssignmentMapView = ({ result, incluirRetorno, visibles, situaciones }) =>
         .map(({ r, idx }) => `
           <div class="map-legend-row">
             <span style="background:${ROUTE_COLORS[idx % ROUTE_COLORS.length]}"></span>${escapeHtml(r.responsable)}
-          </div>`).join('');
+          </div>`).join('')
+        + (conDesplazamiento
+          ? '<div class="map-legend-row"><i class="desplazamiento-dot leyenda"></i>Donde dio «Desplazamiento OK»</div>'
+          : '');
       return div;
     };
     legend.addTo(map);

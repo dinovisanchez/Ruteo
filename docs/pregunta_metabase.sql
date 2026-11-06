@@ -26,7 +26,10 @@ SELECT
   city_name AS "Ciudad",
   department AS "Departamento",
   wo_generate_by AS "Creado por",
-  created_at AS "Fecha de creación"
+  created_at AS "Fecha de creación",
+  -- El id de la visita en la app de técnicos (el mismo visit_id de electrician_status_tracking): une la pregunta
+  -- de desplazamientos (ver «Desplazamiento OK de cada CO» en el README). Si no coincide, prueba con visit_id
+  id AS "Id visita"
 FROM operations.visitas_general
 WHERE deleted_at IS NULL
   AND COALESCE(estado, '') NOT ILIKE '%cancel%'

@@ -25,6 +25,7 @@ const entorno = {
   METABASE_URL: 'http://localhost:3010',
   METABASE_API_KEY: 'test-key',
   METABASE_CARD_ID: '44',
+  METABASE_DESPLAZAMIENTOS_CARD_ID: '45',
   ASIGNACION_CONFIG_PATH: CONFIG,
   RESULTADOS_PATH: path.join(SALIDA, 'sugerencias.json'),
   OSRM_URL: 'http://localhost:3010',

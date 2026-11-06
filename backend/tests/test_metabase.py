@@ -169,8 +169,27 @@ def test_las_vencidas_en_olibia_no_entran_aunque_digan_por_asignar():
         con_estados("CO6", A, "Asignada", "ASSIGNED", dia(1)),
     ])
     assert sorted(ots) == ["CO5", "CO6"]
-    assert "OTs vencidas en Olibia que no se cargan: 4" in avisos
+    aviso = next(a for a in avisos if a.startswith("OTs vencidas en Olibia que no se cargan: 4"))
+    # Dice qué valores quitó, para revisarlo contra Olibia
+    assert "«Vencida» (2)" in aviso and "«Cierre vencido» (1)" in aviso and "«EXPIRED» (1)" in aviso
     assert not any("no conoce" in a for a in avisos)
+
+
+@pytest.mark.parametrize("columna, valor", [
+    ("Estado", "Expirada"),
+    ("Estado", "VENCIMIENTO SLA"),
+    ("Estado", "Caducada"),
+    ("Estado app", "OVERDUE_ASSIGNMENT"),
+    # Una columna de estado con otro nombre también cuenta
+    ("Estado Olibia", "Vencida"),
+    ("status_visita", "expired"),
+])
+def test_las_vencidas_se_reconocen_escritas_de_varias_formas(columna, valor):
+    def con(codigo, texto):
+        return fila(codigo, int(codigo[2:]), dia(1), P, **{columna: texto})
+    ots, avisos = leer([con("CO1", valor), con("CO2", "Por asignar")])
+    assert sorted(ots) == ["CO2"]
+    assert any(a.startswith("OTs vencidas en Olibia que no se cargan: 1") and f"«{valor}»" in a for a in avisos)
 
 
 def test_una_visita_vencida_no_le_quita_el_codigo_a_la_nueva():
@@ -186,3 +205,42 @@ def test_una_visita_cancelada_no_le_quita_el_codigo_a_la_vigente():
 def test_un_archivo_sin_columnas_de_estado_trae_pendientes():
     actividades, _, avisos = metabase.filas_a_actividades([{"Bia Code": "X1", "OR": "Enel", "Dirección": "Calle 1"}], {})
     assert actividades[0].situacion == "pendiente" and avisos == []
+
+
+def test_ubicacion_y_hora_del_desplazamiento_ok():
+    ots, _ = leer([
+        fila("CO1", 1, dia(0), A, **{"Latitud desplazamiento": "4,6790", "Longitud desplazamiento": -74.047,
+                                     "Fecha desplazamiento": f"{dia(0)}T13:52:00Z"}),
+        # Sin datos del desplazamiento, o con coordenadas fuera de Colombia: no hay ubicación
+        fila("CO2", 2, dia(0), A, **{"Latitud desplazamiento": None, "Longitud desplazamiento": None,
+                                     "Fecha desplazamiento": None}),
+        fila("CO3", 3, dia(0), A, **{"Latitud desplazamiento": 40.4, "Longitud desplazamiento": -3.7,
+                                     "Fecha desplazamiento": dia(0)}),
+    ])
+    co1 = ots["CO1"]
+    assert (co1.desplazamiento_ok.latitude, co1.desplazamiento_ok.longitude) == (4.679, -74.047)
+    # En UTC se pasa a la hora de Colombia
+    assert co1.desplazamiento_ok_en == f"{dia(0)} 08:52"
+    assert ots["CO2"].desplazamiento_ok is None and ots["CO2"].desplazamiento_ok_en is None
+    assert ots["CO3"].desplazamiento_ok is None and ots["CO3"].desplazamiento_ok_en == dia(0)
+
+
+def test_desplazamiento_ok_en_una_sola_columna_de_gps():
+    ots, _ = leer([fila("CO1", 1, dia(0), A, **{"GPS desplazamiento OK": "4.6790, -74.0470"})])
+    assert (ots["CO1"].desplazamiento_ok.latitude, ots["CO1"].desplazamiento_ok.longitude) == (4.679, -74.047)
+    # La ubicación de la OT no se confunde con la del desplazamiento
+    assert ots["CO1"].coordinates is None
+
+
+def test_la_hora_del_desplazamiento_sin_zona_es_utc(monkeypatch):
+    from shared.config import settings
+    # Así llega de la app de técnicos: UTC, con milésimas y sin zona
+    assert metabase.hora_desplazamiento("2026-11-05T19:27:12.035") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento("2026-11-05 02:10:00") == ("2026-11-04", "21:10")
+    # Con zona se respeta la que trae
+    assert metabase.hora_desplazamiento("2026-11-05T19:27:00Z") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento("2026-11-05T14:27:00-05:00") == ("2026-11-05", "14:27")
+    assert metabase.hora_desplazamiento(None) == (None, None)
+    # Si la pregunta ya las trae en hora de Colombia
+    monkeypatch.setattr(settings, "DESPLAZAMIENTOS_EN_UTC", False)
+    assert metabase.hora_desplazamiento("2026-11-05T14:27:12") == ("2026-11-05", "14:27")

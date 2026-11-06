@@ -1,6 +1,7 @@
 # Ruteo en un contenedor: la app compilada y el backend (gateway + optimizador) en una sola imagen.
 # docker build -t ruteo . && docker run -p 8000:8000 --env-file backend/.env -v ruteo-datos:/datos ruteo
-# Necesita GOOGLE_CLIENT_ID (login con Google) o, solo para probar en un equipo propio, SIN_LOGIN=1.
+# Necesita un login: CLAVE_ACCESO (12 caracteres o más) o GOOGLE_CLIENT_ID; solo para probar en un equipo
+# propio, SIN_LOGIN=1.
 
 FROM node:22-slim AS app
 WORKDIR /ruteo/frontend
