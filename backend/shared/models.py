@@ -51,8 +51,9 @@ class Activity(BaseModel):
     # Dónde y cuándo el técnico dio «Desplazamiento OK» en Olibia, si la pregunta lo trae
     desplazamiento_ok: Optional[GPSCoordinates] = None
     desplazamiento_ok_en: Optional[str] = None  # YYYY-MM-DD HH:MM (hora de Colombia) o YYYY-MM-DD
-    # Cuándo marcó que llegó a la dirección (IN_ADDRESS) después de ese desplazamiento
+    # Cuándo y dónde marcó que llegó a la dirección (IN_ADDRESS) después de ese desplazamiento: el sitio real
     llegada_sitio_en: Optional[str] = None  # YYYY-MM-DD HH:MM (hora de Colombia)
+    llegada_sitio: Optional[GPSCoordinates] = None
 
     def parse_coordinates(self) -> GPSCoordinates:
         """Parse GPS string into GPSCoordinates object"""

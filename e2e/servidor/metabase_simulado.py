@@ -128,15 +128,20 @@ for n, fila in enumerate(FILAS):
     fila["Fecha de creación"] = f"{HOY - timedelta(days=1 + n % 9)}T10:15:00"
     fila["Id visita"] = 700000 + n
 
-# Pregunta 45: dónde dieron «Desplazamiento OK» (en UTC y sin zona, como la app de técnicos). Edicson cerca de su
-# OT de hoy en Chicó; Jhonatan a unos 3 km de la suya en Barranquilla
+# Pregunta 45: dónde dieron «Desplazamiento OK» y dónde marcaron la llegada (horas en UTC y sin zona, como la
+# app de técnicos). Edicson salió a ~1,9 km de su OT de hoy en Chicó y llegó en 15 min; Jhonatan, a ~2,8 km
+# de la suya en Barranquilla, no marcó la llegada; Luis lo abrió ya en el sitio de su OT sin ubicación
 _VISITA = {f["Bia Code"]: f["Id visita"] for f in FILAS}
 DESPLAZAMIENTOS = [
     {"Id visita": _VISITA["CO1000000001"], "Fecha desplazamiento": f"{HOY}T18:52:00.035",
-     "Latitud desplazamiento": 4.6789, "Longitud desplazamiento": -74.0466, "Fecha llegada": f"{HOY}T19:07:30"},
-    # Jhonatan no marcó la llegada: hay km pero no tiempo
+     "Latitud desplazamiento": 4.6950, "Longitud desplazamiento": -74.0466, "Fecha llegada": f"{HOY}T19:07:30",
+     "Latitud llegada": 4.6781, "Longitud llegada": -74.0461},
     {"Id visita": _VISITA["CO0200000021"], "Fecha desplazamiento": f"{HOY}T17:40:00",
-     "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80, "Fecha llegada": None},
+     "Latitud desplazamiento": 10.995, "Longitud desplazamiento": -74.80, "Fecha llegada": None,
+     "Latitud llegada": None, "Longitud llegada": None},
+    {"Id visita": _VISITA["CO0500000001"], "Fecha desplazamiento": f"{HOY}T19:58:10",
+     "Latitud desplazamiento": 4.6500, "Longitud desplazamiento": -74.0700, "Fecha llegada": f"{HOY}T19:59:05",
+     "Latitud llegada": 4.6502, "Longitud llegada": -74.0701},
 ]
 
 

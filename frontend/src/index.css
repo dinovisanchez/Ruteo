@@ -554,8 +554,8 @@ body {
   color: var(--label-3);
 }
 
-/* Dónde y cuándo el técnico dio «Desplazamiento OK»; en naranja si fue lejos de la dirección */
-.ot-desplazamiento.lejos {
+/* Dónde y cuándo el técnico dio «Desplazamiento OK»; en naranja si el trayecto no cuadra */
+.ot-desplazamiento.revisar {
   color: #C93400;
 }
 
@@ -1003,7 +1003,7 @@ body {
   transform: rotate(45deg);
 }
 
-.desplazamiento-dot.lejos {
+.desplazamiento-dot.revisar {
   background: #FF9500;
 }
 

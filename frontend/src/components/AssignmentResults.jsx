@@ -48,12 +48,12 @@ const origenDecision = (d, editada, cerrada = false) => {
   return d.situacion === 'asignada' ? 'Asignada en Metabase' : 'Sugerido por Ruteo';
 };
 
-// Where and when the technician gave «Desplazamiento OK», in orange if it was far from the address
+// Where and when the technician gave «Desplazamiento OK», in orange if the trip does not add up
 const DesplazamientoOk = ({ actividad }) => {
   const d = desplazamientoOk(actividad);
   if (!d) return null;
   return (
-    <div className={`ot-cell-sub ot-desplazamiento${d.lejos ? ' lejos' : ''}`}>
+    <div className={`ot-cell-sub ot-desplazamiento${d.revisar ? ' revisar' : ''}`}>
       <AimOutlined />
       {' '}
       {textoDesplazamiento(d)}
@@ -520,12 +520,18 @@ const AssignmentResults = ({
             `${t.nombre}: ${plural(t.ots, 'OT', 'OTs')}`,
             t.km !== null ? `${km(t.km)} km` : null,
             t.minutos !== null ? `${Math.round(t.minutos)} min` : null,
+            t.enSitio ? `${t.enSitio} abiertos ya en el sitio` : null,
+            t.noCuadran ? `${t.noCuadran} no cuadran` : null,
           ].filter(Boolean).join(' · '));
           return (
             <Tooltip
               title={(
                 <div>
-                  <div>Por técnico (km en línea recta desde donde dio «Desplazamiento OK»; minutos hasta marcar que llegó):</div>
+                  <div>
+                    Por técnico. Km en línea recta desde donde dio «Desplazamiento OK» hasta donde marcó que llegó;
+                    minutos entre las dos marcas. No cuentan los abiertos ya en el sitio (a menos de 300 m) ni los que
+                    no cuadran (más de 90 km/h).
+                  </div>
                   {detalle.map((linea) => <div key={linea}>{linea}</div>)}
                 </div>
               )}

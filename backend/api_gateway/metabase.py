@@ -81,8 +81,11 @@ ALIAS_DESPLAZAMIENTOS: Dict[str, List[str]] = {
     "latitud": ["latitud desplazamiento", "latitude", "lat"],
     "longitud": ["longitud desplazamiento", "longitude", "lon", "lng"],
     "fecha": ["fecha desplazamiento", "hora desplazamiento", "hora marcado", "hora", "created at app", "created at"],
-    # Cuándo marcó que llegó a la dirección (IN_ADDRESS)
+    # Cuándo y dónde marcó que llegó a la dirección (IN_ADDRESS)
     "llegada": ["fecha llegada", "hora llegada", "llegada", "llegada al sitio", "fecha llegada sitio"],
+    "llegada_gps": ["gps llegada", "ubicacion llegada", "coordenadas llegada"],
+    "llegada_latitud": ["latitud llegada", "lat llegada"],
+    "llegada_longitud": ["longitud llegada", "lon llegada", "lng llegada"],
 }
 
 # Tipo de medida (como viene de Olibia o en español) → como se nombra en el tipo de OT
@@ -506,16 +509,17 @@ def unir_desplazamientos(actividades: List[Activity], mapeo: Dict[str, str], fil
         fecha, hora = hora_desplazamiento(fila.get(columnas[campo])) if campo in columnas else (None, None)
         return f"{fecha} {hora}" if fecha and hora else fecha
 
-    ultimos: Dict[Tuple[str, str], Tuple[str, GPSCoordinates, Optional[str], Optional[str]]] = {}
+    ultimos: Dict[Tuple[str, str], Tuple[str, GPSCoordinates, Optional[str], Optional[str], Optional[GPSCoordinates]]] = {}
     for fila in filas:
         coords = _coordenadas_fila(fila, columnas)
         if not coords:
             continue
         cuando, llegada = momento(fila, "fecha"), momento(fila, "llegada")
+        sitio = _coordenadas_fila(fila, columnas, "llegada_")
         for campo in llaves:
             valor = _llave(fila.get(columnas[campo]))
             if valor and ((campo, valor) not in ultimos or (cuando or "") > ultimos[(campo, valor)][0]):
-                ultimos[(campo, valor)] = (cuando or "", coords, cuando, llegada)
+                ultimos[(campo, valor)] = (cuando or "", coords, cuando, llegada, sitio)
 
     unidas = 0
     for actividad in actividades:
@@ -525,7 +529,7 @@ def unir_desplazamientos(actividades: List[Activity], mapeo: Dict[str, str], fil
             encontrado = ultimos.get((campo, _llave(actividad.extras.get(mapeo[campo]))))
             if encontrado:
                 actividad.desplazamiento_ok, actividad.desplazamiento_ok_en = encontrado[1], encontrado[2]
-                actividad.llegada_sitio_en = encontrado[3]
+                actividad.llegada_sitio_en, actividad.llegada_sitio = encontrado[3], encontrado[4]
                 unidas += 1
                 break
     if ultimos and not unidas:

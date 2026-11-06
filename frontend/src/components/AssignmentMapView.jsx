@@ -136,7 +136,7 @@ const AssignmentMapView = ({ result, incluirRetorno, visibles, situaciones }) =>
             opacity: visible ? 1 : 0.2,
             icon: L.divIcon({
               className: 'stop-marker',
-              html: `<div class="desplazamiento-dot${detalle.lejos ? ' lejos' : ''}" style="border-color:${color}"></div>`,
+              html: `<div class="desplazamiento-dot${detalle.revisar ? ' revisar' : ''}" style="border-color:${color}"></div>`,
               iconSize: [14, 14],
               iconAnchor: [7, 7],
             }),

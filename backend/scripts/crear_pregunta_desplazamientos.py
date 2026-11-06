@@ -31,21 +31,26 @@ NOMBRE = "Ruteo · Desplazamientos OK (IN_ROUTE)"
 SQL = """-- Ruteo · Desplazamientos: el último «Desplazamiento OK» (IN_ROUTE) de cada visita, con su ubicación.
 -- Ruteo la une a sus OTs por «Id visita». Las horas van en UTC, como las guarda la app de técnicos: Ruteo las
 -- pasa a la hora de Colombia.
--- «Fecha llegada»: cuándo marcó que llegó a la dirección (IN_ADDRESS) después de ese desplazamiento.
+-- «Llegada»: cuándo y dónde marcó que llegó a la dirección (IN_ADDRESS), la primera vez después de ese
+-- desplazamiento. Ese punto es el sitio real: Ruteo mide los km del desplazamiento hasta ahí.
 SELECT DISTINCT ON (t.visit_id)
   t.visit_id                                AS "Id visita",
   COALESCE(t.created_at_app, t.created_at)  AS "Fecha desplazamiento",
   t.latitude                                AS "Latitud desplazamiento",
   t.longitude                               AS "Longitud desplazamiento",
-  llegada.hora                              AS "Fecha llegada"
+  llegada.hora                              AS "Fecha llegada",
+  llegada.latitude                          AS "Latitud llegada",
+  llegada.longitude                         AS "Longitud llegada"
 FROM __TABLA__ t
 LEFT JOIN LATERAL (
-  SELECT MIN(COALESCE(a.created_at_app, a.created_at)) AS hora
+  SELECT COALESCE(a.created_at_app, a.created_at) AS hora, a.latitude, a.longitude
   FROM __TABLA__ a
   WHERE a.visit_id = t.visit_id
     AND a.deleted_at IS NULL
     AND a.electrician_status = 'IN_ADDRESS'
     AND COALESCE(a.created_at_app, a.created_at) >= COALESCE(t.created_at_app, t.created_at)
+  ORDER BY COALESCE(a.created_at_app, a.created_at)
+  LIMIT 1
 ) llegada ON true
 WHERE t.deleted_at IS NULL
   AND t.electrician_status = 'IN_ROUTE'
@@ -117,6 +122,9 @@ def revisar(cliente: httpx.Client, card_id: Any) -> None:
     if "llegada" in columnas:
         con_llegada = sum(1 for f in filas if f.get(columnas["llegada"]))
         print(f"  {con_llegada} {'tiene' if con_llegada == 1 else 'tienen'} la hora de llegada a la dirección (IN_ADDRESS).")
+    if "llegada_latitud" in columnas:
+        con_gps = sum(1 for f in filas if f.get(columnas["llegada_latitud"]) not in (None, 0, "0", ""))
+        print(f"  {con_gps} {'tiene' if con_gps == 1 else 'tienen'} el GPS de la llegada (con eso se miden los km al sitio).")
     if "fecha" in columnas:
         horas = sorted((str(f.get(columnas["fecha"])) for f in filas if f.get(columnas["fecha"])), reverse=True)[:3]
         print("  Horas de los últimos desplazamientos: como las manda Metabase → como las muestra Ruteo (hora de")
@@ -163,7 +171,7 @@ def main() -> None:
             return
         if args.actualizar:
             actualizar(cliente, args.actualizar, args.base, args.dias, args.tabla)
-            print(f"Actualicé la pregunta {args.actualizar}: ahora trae también la hora de llegada a la dirección.\n")
+            print(f"Actualicé la pregunta {args.actualizar}: ahora trae también la hora y el GPS de la llegada a la dirección.\n")
             revisar(cliente, args.actualizar)
             return
         card_id = crear(cliente, args.base, args.dias, args.coleccion, args.tabla)

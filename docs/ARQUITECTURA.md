@@ -130,7 +130,7 @@ Cómo decide `asignar`:
 | `services/osrm.js` | OSRM desde el navegador, de respaldo |
 | `services/otTypes.js` | Minutos y personas por defecto de cada tipo de OT |
 | `services/cercania.js` | Para cada pendiente, las OTs ya asignadas a la distancia «cerca» (en línea recta, en el navegador) |
-| `services/desplazamiento.js` | Dónde y cuándo se dio «Desplazamiento OK» en cada CO: la hora, los km al sitio (más de 1 km, en naranja), la llegada a la dirección y los minutos, el enlace a Google Maps y los promedios de km y minutos, en total y por técnico |
+| `services/desplazamiento.js` | Dónde y cuándo se dio «Desplazamiento OK» en cada CO: la hora, los km hasta donde marcó la llegada (o hasta la dirección si es exacta), la llegada y los minutos, los que no cuadran (abiertos ya en el sitio, más de 90 km/h), el enlace a Google Maps y los promedios sin los que no cuadran, en total y por técnico |
 | `services/sesion.js` | Sesión de «Iniciar sesión con Google» (token en `sessionStorage`) |
 | `components/Acceso.jsx` | Pide la cuenta de Google o la clave de acceso antes de mostrar la app cuando el servidor tiene login |
 | `components/ResultsDashboard.jsx` | Vista *Resultados*: lo sugerido frente a lo asignado |
